@@ -4,6 +4,7 @@ const events=readFileSync(process.argv[2],'utf8').trim().split('\n').map(JSON.pa
 const by=name=>events.filter(e=>e.event===name).map(e=>e.value);
 assert.deepEqual(by('error'),[]);
 assert.equal(by('creator').length,1);
+assert.deepEqual(by('nested_rejected'),[true]);
 assert.equal(by('mock_tool_call').length,1);
 const routes=[...new Set(by('request').map(x=>[x.model,x.effort].join(':')))].sort();
 assert.deepEqual(routes,['alpha:low','beta:low','legacy:']);

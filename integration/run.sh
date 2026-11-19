@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Pass an isolated npm prefix containing @deepseek-ai/dsh@0.2.2-rc.1.
+# Pass an isolated npm prefix containing @deepseek-ai/dsh@0.2.2 RC or stable.
 set -euo pipefail
 prefix="$(realpath "${1:?usage: integration/run.sh /path/to/isolated/dsh/npm-prefix}")"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 testdir="$(mktemp -d)"
 trap 'rm -rf "$testdir"' EXIT
 export DSH_HOME="$testdir/dsh" XDG_DATA_HOME="$testdir/xdg" npm_config_cache="$testdir/npm"
-export DSH_E2E_LOG="$testdir/results.jsonl" DSH_E2E_LLM_MODULE="$prefix/node_modules/@deepseek-ai/dsh-llm/lib/index.js"
+export DSH_E2E_LOG="$testdir/results.jsonl" DSH_E2E_LLM_MODULE="${DSH_E2E_LLM_MODULE:-$prefix/node_modules/@deepseek-ai/dsh-llm/lib/index.js}"
 dsh="$prefix/node_modules/.bin/dsh"
 (cd "$root"; npm pack --pack-destination "$testdir" --silent)
-"$dsh" plugin --profile web add --store-dir "$testdir/pnpm" "$testdir/dsh-schedule-model-0.1.3.tgz"
+"$dsh" plugin --profile web add --store-dir "$testdir/pnpm" "$testdir/dsh-schedule-model-0.1.4.tgz"
 profile="$DSH_HOME/profiles/web"
 "$dsh" --profile web --dump-config > "$testdir/composed.yml"
 grep -q 'id: schedule-model-natural' "$testdir/composed.yml"

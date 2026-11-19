@@ -1,8 +1,7 @@
 import { apply as installPin, selection } from './index.js';
 import { inspectLatest, configuredSessionModel } from './observe.js';
 import { resolveNatural, naturalTiming } from './natural.js';
-import { defineTool } from '@deepseek-ai/dsh-tools';
-import { delegationDepthOf } from '@deepseek-ai/dsh-subagent';
+import { defineTool, delegationDepthOf } from './tool.js';
 
 export const name = 'schedule-model-create';
 export const inject = ['schedule', 'tools', 'agentPresets', 'sessionController', 'llm', 'sessions', 'systemPrompt'];

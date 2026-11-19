@@ -4,7 +4,7 @@
 
 ## 2. 怎么通过自然语言使用
 
-下载 [v0.1.3 插件包](dist/dsh-schedule-model-0.1.3.tgz)。DSH 0.2.2-rc.1 Web 版可通过 `dsh plugin --profile web add /path/to/dsh-schedule-model-0.1.3.tgz` 安装，重启后直接在对话里说：
+下载 [v0.1.4 插件包](dist/dsh-schedule-model-0.1.4.tgz)。支持 DSH 0.2.2 系列（从 rc.1 起，含正式版）；已实测 Web 版 rc.1、rc.3、rc.4、rc.5。Web 版可通过 `dsh plugin --profile web add /path/to/dsh-schedule-model-0.1.4.tgz` 安装，重启后直接在对话里说：
 
 > 用 ds，思考调低，每小时跑一次「进度检查」，检查当前项目的待办并汇报变化。
 

@@ -47,6 +47,14 @@ export function apply(ctx) {
       }
       const creator = ctx.tools.get('schedule_create_with_model');
       if (!creator) throw new Error('creator tool failed to register');
+      const rejectArgs={title:'nested must not write',prompt:'not allowed',model:'ds',thinking:'低',intervalMinutes:60};
+      try {
+        await creator.execute(rejectArgs,{agent:{options:{subagentDepth:1},session:{header:{},id:'not-real'}}});
+        throw new Error('Nested scheduled mutation unexpectedly accepted');
+      } catch(error) {
+        if(!String(error.message).includes('root session'))throw error;
+        log('nested_rejected',true);
+      }
       const {sessionId} = await ctx.sessionController.create({});
       const {agent} = await ctx.sessionController.resolveAgent(sessionId);
       const signal=new AbortController().signal;
