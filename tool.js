@@ -26,7 +26,10 @@ export function defineTool(spec) {
       for(const [key,schema] of Object.entries(fields)){
         const value=Object.hasOwn(args,key)?args[key]:undefined;
         if(value===undefined && !schema.required)continue;
-        if(typeof value!==schema.type || (typeof value==='number'&&!Number.isFinite(value)) ||
+        const kindOk=schema.type==='array'
+          ?Array.isArray(value)&&(!schema.items||value.every(item=>typeof item===schema.items.type))
+          :typeof value===schema.type;
+        if(!kindOk || (typeof value==='number'&&!Number.isFinite(value)) ||
           (schema.enum && !schema.enum.includes(value)))violations.push(`Invalid ${key}`);
       }
       if(violations.length) throw new ToolArgsError(violations);

@@ -31,8 +31,8 @@ export function resolveNatural(catalog,model,thinking){
 }
 
 export function naturalTiming(a){
-  if(Number(a.intervalMinutes!==undefined)+Number(a.dailyTime!==undefined)+Number(a.at!==undefined)!==1)
-    throw new Error('Choose exactly one schedule: intervalMinutes, dailyTime or at.');
+  if(Number(a.intervalMinutes!==undefined)+Number(a.dailyTime!==undefined)+Number(a.dailyTimes!==undefined)+Number(a.at!==undefined)!==1)
+    throw new Error('Choose exactly one schedule: intervalMinutes, dailyTime, dailyTimes or at.');
   if(a.intervalMinutes!==undefined){
     if(!Number.isSafeInteger(a.intervalMinutes)||a.intervalMinutes<1||!Number.isSafeInteger(a.intervalMinutes*60))
       throw new Error('The interval must be a positive whole number of minutes.');
@@ -44,5 +44,33 @@ export function naturalTiming(a){
     return {kind:'at',at:a.at};
   }
   if(!a.timeZone)throw new Error('Daily schedules need an explicit time zone.');
+  if(a.dailyTimes!==undefined)return multiDailyTiming(a.dailyTimes,a.timeZone);
   return {kind:'daily',daily:{time:a.dailyTime,time_zone:a.timeZone}};
+}
+
+
+// One native recurrence. DSH chooses BYSETPOS within each wall-clock day
+// before resolving local timestamps (including DST gaps).
+function multiDailyTiming(times,zone){
+  if(!Array.isArray(times)||times.length<2||times.length>31||
+      times.some(t=>typeof t!=='string'||! /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(t)))
+    throw new Error('Daily times must contain 2–31 local HH:mm values.');
+  if(!/^(?:UTC|[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)+)$/.test(zone))
+    throw new Error('Daily times require UTC or an explicit IANA Area/Location time zone.');
+  try{new Intl.DateTimeFormat('en',{timeZone:zone});}
+  catch{throw new Error('Unknown time zone.');}
+  const unique=[...new Set(times)].sort();
+  if(unique.length!==times.length)throw new Error('Daily times may not contain duplicates.');
+  const pairs=unique.map(t=>t.split(':').map(Number));
+  const hours=[...new Set(pairs.map(([hour])=>hour))];
+  const minutes=[...new Set(pairs.map(([,minute])=>minute))].sort((a,b)=>a-b);
+  const positions=pairs.map(([h,m])=>hours.indexOf(h)*minutes.length+minutes.indexOf(m)+1);
+  const fullProduct=pairs.length===hours.length*minutes.length;
+  if(!fullProduct&&positions.some(i=>i>366))
+    throw new Error('These exact daily times exceed the native RRULE position range; no task was created.');
+  // A fixed historical noon avoids anchoring creation to a possibly missing
+  // or ambiguous wall time on a daylight-saving transition day.
+  const start=zone==='UTC'?'DTSTART:20000115T120000Z':`DTSTART;TZID=${zone}:20000115T120000`;
+  return {kind:'rrule',rrule:`${start}\nRRULE:FREQ=DAILY;BYHOUR=${hours};BYMINUTE=${minutes};BYSECOND=0`+
+    (fullProduct?'':`;BYSETPOS=${positions}`)};
 }

@@ -1,8 +1,10 @@
+import {verifyOverrides} from './override-fixture.js';
 const { LlmAdapter } = await import(process.env.DSH_E2E_LLM_MODULE);
-import {appendFileSync} from 'node:fs';
+import {appendFileSync,mkdirSync,realpathSync} from 'node:fs';
+import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 export const name='schedule-model-e2e';
-export const inject=['schedule','llm','sessionController','tools','agentPresets'];
+export const inject=['schedule','llm','sessionController','tools','agentPresets','workspaceRegistry'];
 const log=(event,value)=>appendFileSync(process.env.DSH_E2E_LOG,JSON.stringify({event,value})+'\n');
 class Local extends LlmAdapter {
   async listModels(provider){return (provider==='deepseek-test'?['alpha']:['beta','legacy']).map(id=>({provider,id,name:id}));}
@@ -38,11 +40,16 @@ export function apply(ctx) {
       if (process.env.DSH_E2E_RESTART === '1') {
         const rows = (await ctx.schedule.list()).items;
         log('restart',rows.map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
+        const multi=rows.find(row=>row.title==='multi');
+        const {agent:multiAgent}=await ctx.sessionController.resolveAgent(multi.target.sessionId);
+        log('multi_restart',{preset:multiAgent.session.header.agentPreset,
+          current:multiAgent.model.current(),cwd:multiAgent.session.header.cwd.endsWith('test-schedule-workspace')});
         const alpha=rows.find(row=>row.title==='alpha');
         const {agent}=await ctx.sessionController.resolveAgent(alpha.involvedSessionIds.find(id=>id!==alpha.target.sessionId));
         const q=ctx.tools.get('schedule_view_model');
         const result=JSON.parse(await q.execute({identifier:alpha.id},{agent,signal:new AbortController().signal}));
         log('query_restart',result);
+        await verifyOverrides(ctx,log,true);
         return;
       }
       const creator = ctx.tools.get('schedule_create_with_model');
@@ -75,12 +82,50 @@ export function apply(ctx) {
       const exec={agent,signal:new AbortController().signal};
       const before=JSON.parse(await query.execute({identifier:'alpha'},exec));
       log('query_before',before);
+      const cwd=join(process.env.DSH_HOME,'test-schedule-workspace');
+      mkdirSync(cwd,{recursive:true});
+      const workspace=await ctx.workspaceRegistry.create(cwd);
+      const presetSource=await ctx.sessionController.create({agentPreset:'schedule-alpha'});
+      const {agent:presetAgent}=await ctx.sessionController.resolveAgent(presetSource.sessionId);
+      const multiInput={title:'multi',prompt:'Reply with fixture-ok only.',model:'ds',thinking:'低',
+        dailyTimes:['08:00','17:30'],timeZone:'Asia/Singapore',cwd};
+      const countBefore=(await ctx.schedule.list()).total;
+      try{
+        await creator.execute({...multiInput,cwd:join(cwd,'missing')},{agent:presetAgent,signal});
+        throw new Error('Missing working directory unexpectedly allowed');
+      }catch(error){if(!String(error.message).includes('does not exist'))throw error;}
+      log('invalid_cwd_unchanged',countBefore===(await ctx.schedule.list()).total);
+      const multi=JSON.parse(await creator.execute(multiInput,{agent:presetAgent,signal}));
+      const task=await ctx.schedule.view({id:multi.id});
+      const {agent:dedicated}=await ctx.sessionController.resolveAgent(task.target.sessionId);
+      log('multi_location',{
+        correctCwd:dedicated.session.header.cwd===realpathSync(cwd),
+        sameWorkspace:workspace.sessionIds.includes(task.target.sessionId),
+        preset:dedicated.session.header.agentPreset,
+      });
+      log('multi_rrule',task.rrule);
+      const legacyCreator=ctx.tools.get('schedule_create_with_preset');
+      const {sessionId:sourceId}=await ctx.sessionController.create({workspaceId:workspace.id});
+      const {agent:sourceAgent}=await ctx.sessionController.resolveAgent(sourceId);
+      const basePreset={prompt:'Reply with fixture-ok only.',preset:'schedule-beta',
+        rrule:'DTSTART:20000115T120000Z\nRRULE:FREQ=DAILY'};
+      const inherited=JSON.parse(await legacyCreator.execute({...basePreset,title:'legacy-inherited'},
+        {agent:sourceAgent,signal}));
+      const explicit=JSON.parse(await legacyCreator.execute({...basePreset,title:'legacy-explicit',cwd},
+        {agent:presetAgent,signal}));
+      const legacyCreated=await Promise.all([inherited,explicit].map(({id})=>ctx.schedule.view({id})));
+      log('legacy_workdir',legacyCreated.map(x=>x.target.create.cwd===realpathSync(cwd)));
+      const legacyDelivered=await ctx.schedule.run({id:inherited.id});
+      const legacySession=legacyDelivered.lastDelivery?.targetSessionId;
+      if(!legacySession)throw new Error('Legacy preset run did not deliver');
+      const {agent:legacyAgent}=await ctx.sessionController.resolveAgent(legacySession);
+      log('legacy_delivery_workdir',legacyAgent.session.header.cwd===realpathSync(cwd));
       const inputs=[['beta','schedule-beta'],['broken','schedule-broken'],['legacy',undefined]];
       const tasks=await Promise.all(inputs.map(([title,agentPreset])=>ctx.schedule.create({
         title,prompt:'Reply with fixture-ok only.',timing:{kind:'after',after_seconds:3600},
         target:{kind:'new',create:agentPreset?{agentPreset}:{}}
       })));
-      tasks.unshift(await ctx.schedule.view({id:created.id}));
+      tasks.unshift(await ctx.schedule.view({id:created.id}),task);
       log('stored',tasks.map(e=>[e.title,e.target.create?.agentPreset]));
       await Promise.all(tasks.map(async e=>{
         try {const row=await ctx.schedule.run({id:e.id});log('run',[e.title,!!row.lastDelivery,row.code]);}
@@ -93,6 +138,7 @@ export function apply(ctx) {
       }
       const hidden=JSON.parse(await query.execute({identifier:'legacy'},exec));
       log('query_hidden',hidden);
+      await verifyOverrides(ctx,log);
     } catch(error){log('error',error.stack);}
   },1800);
   ctx.effect(()=>()=>clearTimeout(timer),'fixture-timer');

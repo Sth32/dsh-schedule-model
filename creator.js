@@ -1,7 +1,10 @@
+import { realpath, stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { apply as installPin, selection } from './index.js';
 import { inspectLatest, configuredSessionModel } from './observe.js';
 import { resolveNatural, naturalTiming } from './natural.js';
 import { defineTool, delegationDepthOf } from './tool.js';
+import { createScheduleOverrides } from './schedule-override.js';
 
 export const name = 'schedule-model-create';
 export const inject = ['schedule', 'tools', 'agentPresets', 'sessionController', 'llm', 'sessions', 'systemPrompt'];
@@ -31,32 +34,45 @@ export function apply(ctx, config) {
       prompt:str('Prompt-instruction to deliver'),
       rrule:str('DSH two-line DTSTART and RRULE text, with explicit time zone or UTC'),
       preset:{...str('Model and effort preset ID configured by the profile administrator'), enum:presets},
+      cwd:{type:'string',description:'Optional explicit absolute path to an existing working directory; otherwise inherit the source session directory.'},
     },
     output:{
       schema:{type:'string'},
       render(_args,value) { return [{type:'text',text:value}]; }
     },
-    async execute({title,prompt,rrule,preset},exec) {
+    async execute({title,prompt,rrule,preset,cwd:explicitCwd},exec) {
       if (!exec.agent || delegationDepthOf(exec.agent)>0)
         throw new Error('A root session must request this scheduled task.');
+      const cwd=await scheduledWorkingDirectory(exec.agent,explicitCwd);
+      exec.signal?.throwIfAborted();
       const task = await ctx.schedule.create({
-        title,prompt,timing:{kind:'rrule',rrule},target:{kind:'new',create:{agentPreset:preset}}
+        title,prompt,timing:{kind:'rrule',rrule},target:{kind:'new',create:{agentPreset:preset,...(cwd===undefined?{}:{cwd})}}
       },exec.agent.session.id,exec.signal);
       return JSON.stringify({id:task.id,preset,scheduledAt:task.scheduledAt});
     },
   })), 'schedule-model.creator');
-  ctx.effect(() => registerNatural(ctx), 'schedule-model.natural');
+  let overrides;
+  ctx.inject(['profileContext','storageDomain','agents'], child => {
+    const current=createScheduleOverrides(child);
+    child.effect(() => {
+      overrides=current;
+      return () => { if(overrides===current)overrides=undefined; };
+    }, 'schedule-model.override-state');
+    child.effect(() => current.registerDeliveryHook(), 'schedule-model.override-delivery');
+    child.effect(() => current.registerTool(resolveOwnedTask), 'schedule-model.override-tool');
+  });
+  ctx.effect(() => registerNatural(ctx, routes), 'schedule-model.natural');
   ctx.systemPrompt.section({
     name:'tool:schedule-model-natural',
     order:ctx.systemPrompt.getSectionOrder('TOOL_SCHEDULE'),
     text:({scope})=>ctx.tools.get('schedule_create_with_model',scope)
-      ?'When the user specifies a model or thinking level for a scheduled task, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
+      ?'To change only the model or thinking level of an existing task, use schedule_update_model if available; preserve its recurrence and all other settings. If that tool is unavailable or the target is not a fresh session per run, report that the change is not supported; never recreate or retarget it. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
       :'',
   });
-  ctx.effect(() => registerQuery(ctx, routes), 'schedule-model.query');
+  ctx.effect(() => registerQuery(ctx, routes, task => overrides?.configured(task)), 'schedule-model.query');
 }
 
-function registerNatural(ctx){
+function registerNatural(ctx, routes){
   return ctx.tools.register(defineTool({
     name:'schedule_create_with_model',
     description:'Create a native DSH scheduled task with the requested model name/alias and requested thinking level. The model is selected only for a fresh task conversation. Prefer this when the user specifies a model or thinking level. Once, interval, and daily schedules are supported.',
@@ -66,7 +82,9 @@ function registerNatural(ctx){
       model:str('Exact model ID/display name or user alias, e.g. ds. Never substitute an unspecified model.'),
       thinking:{type:'string',description:'Level requested by user, such as 低/low. Omit when user did not specify.'},
       intervalMinutes:{type:'number',description:'Repeat every N whole minutes. Hourly means 60.'},
-      dailyTime:{type:'string',description:'Repeat daily at local HH:mm:ss; requires timeZone.'},
+      dailyTime:{type:'string',description:'For one daily time: local HH:mm:ss; requires timeZone.'},
+      dailyTimes:{type:'array',items:{type:'string'},description:'For multiple times each day: exact local HH:mm strings, one per time; requires timeZone. Do not use with dailyTime.'},
+      cwd:{type:'string',description:'Only when explicitly requested: absolute path to the existing working directory.'},
       timeZone:{type:'string',description:'For daily schedules, time zone identifying local time, e.g. Asia/Singapore.'},
       at:{type:'string',description:'For one-off schedules, RFC3339 timestamp with UTC offset.'},
     },
@@ -82,8 +100,9 @@ function registerNatural(ctx){
       const selected=resolved.selection;
       await ctx.llm.resolveCallConfig(selected,exec.signal);
       exec.signal?.throwIfAborted();
-      const cwd=exec.agent.session.header.cwd;
-      const session=await ctx.sessionController.create(cwd===undefined?{}:{cwd});
+      const create=await sessionCreationOptions(ctx,exec.agent,a.cwd,selected,routes);
+      exec.signal?.throwIfAborted();
+      const session=await ctx.sessionController.create(create);
       const {agent}=await ctx.sessionController.resolveAgent(session.sessionId);
       // Do not call sessionController.selectModel: it also saves the global default.
       agent.model.select(selected);
@@ -99,7 +118,38 @@ function registerNatural(ctx){
   }));
 }
 
-export function registerQuery(ctx, routes) {
+async function sessionCreationOptions(ctx,agent,explicitCwd,selected,routes){
+  const request={};
+  const livePresets=agent.ctx?.get('agentPresets');
+  const preset=livePresets?.composedPreset(agent.ctx);
+  if(preset!==undefined){
+    const forced=routes.get(preset);
+    if(forced && (forced.provider!==selected.provider || forced.model!==selected.model ||
+      forced.reasoningEffort!==selected.reasoningEffort))
+      throw new Error('This conversation preset pins a conflicting model or thinking level. Switch to an unpinned preset and retry.');
+    request.agentPreset=preset;
+  }
+  const cwd=await scheduledWorkingDirectory(agent,explicitCwd);
+  if(cwd!==undefined){
+    const workspace=await ctx.get('workspaceRegistry')?.resolveByPath(cwd);
+    if(workspace===undefined)request.cwd=cwd;
+    else request.workspaceId=workspace.id;
+  }
+  return request;
+}
+
+async function scheduledWorkingDirectory(agent,explicitCwd){
+  const cwd=explicitCwd??agent.session.header.cwd;
+  if(cwd===undefined)return undefined;
+  if(!isAbsolute(cwd))throw new Error('Working directory must be an absolute path.');
+  try{
+    const resolved=await realpath(cwd);
+    if(!(await stat(resolved)).isDirectory())throw new Error('not a directory');
+    return resolved;
+  }catch{throw new Error('Working directory does not exist or is not a directory. No task was created.');}
+}
+
+export function registerQuery(ctx, routes, overrideFor) {
   return ctx.tools.register(defineTool({
     name:'schedule_view_model',
     description:'Inspect the configured model and last recorded DSH model request for a scheduled task in this conversation. Use exact ID or title, never treat configuration as execution.',
@@ -117,7 +167,7 @@ export function registerQuery(ctx, routes) {
       const {task,error}=await resolveOwnedTask(ctx.schedule,identifier.trim(),sessionId);
       if(error) return JSON.stringify(error);
       const preset=task.target.create?.agentPreset??null;
-      let configured=preset===null?null:routes.get(preset)??null;
+      let configured=await overrideFor?.(task)??(preset===null?null:routes.get(preset)??null);
       if(!configured&&task.target.kind==='session'){
         try{configured=await configuredSessionModel(ctx.sessionController,task.target.sessionId,exec.signal);}
         catch(error){exec.signal?.throwIfAborted();}
