@@ -36,6 +36,15 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 - 发送 `Admin batch clear`。核对审批显示十条旧覆盖，允许后十条撤销；既有回执不受影响。另测试普通会话、无 GUI owner、审批超时和预览后外部变更的拒绝路径。
 - 夹具使用确定性的模拟模型触发工具，不代表实测具体供应商或每一种自然语言表达。Windows Desktop 单独验证。
 
+### 复用会话二选一
+
+用 `DSH_GUI_REUSE=1 bash integration/gui.sh /path/to/isolated-dsh-npm-prefix [port]` 启动。两条假任务 A、B 共享一个已有对话，管理会话独立。在「Reused receiving session GUI fixture ready.」的会话测试：
+
+1. 发送 `Reuse original review`，同一张选择卡应列出「改原会话」「新开专用会话」「不修改」及影响。选择原会话后拒绝原生审批，任务、会话模型、全局默认不变。
+2. 再请求，选择原会话并允许一次：原目标和两个任务都不改，原会话后续用 `alpha/high`。测试至少一条原生运行。
+3. 发送 `Reuse dedicated review`，选择新开并允许一次。A 开始使用没有旧上下文的新会话（模拟请求 `beta/high`）；B 仍指向原会话，旧回执保留，原生规则不改。预览不创建会话。
+4. 另测取消、失效/拒绝、选项不可用、排队中的会话、并发修改、会话创建后目标更新失败的恢复信息。不能把任意供应商、Windows 或不受信任的宿主插件算作已验。
+
 ## 回归矩阵
 
 | 场景 | 检查通过条件 | 证据 |

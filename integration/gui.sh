@@ -23,7 +23,7 @@ mkdir -p "$fixture"
 printf '%s\n' '{"name":"local-dsh-schedule-e2e","type":"module","exports":"./index.js"}' > "$fixture/package.json"
 cp "$root/integration/gui-fixture.js" "$fixture/index.js"
 cp "$root/integration/startup-briefing.js" "$fixture/startup-briefing.js"
-if [[ "${DSH_GUI_CENTRAL:-0}" == 1 ]]; then
+if [[ "${DSH_GUI_CENTRAL:-0}" == 1 || "${DSH_GUI_REUSE:-0}" == 1 ]]; then
   sed '/^    routes:$/i\    managementPreset: schedule-model-management' "$root/integration/fixture.yml" > "$profile/cordis.patch.yml"
 else
   cp "$root/integration/fixture.yml" "$profile/cordis.patch.yml"

@@ -1,6 +1,6 @@
 {
   "name": "dsh-schedule-model",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "exports": {
     ".": "./index.js",
@@ -19,7 +19,10 @@
     "tool.js",
     "schedule-override.js",
     "schedule-admin.js",
-    "workspace-scope.js"
+    "workspace-scope.js",
+    "reuse-admin.js",
+    "receiving-session-model.js",
+    "dedicated-session.js"
   ],
   "scripts": {
     "test": "node --test"

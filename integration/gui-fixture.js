@@ -8,13 +8,19 @@ const log=(event,value)=>appendFileSync(process.env.DSH_E2E_LOG,JSON.stringify({
 const prompt='Confirm in one line that this scheduled fixture ran.';
 const central=process.env.DSH_GUI_CENTRAL==='1';
 const centralIDs=[];
+const reuse=process.env.DSH_GUI_REUSE==='1';
+let reusableTask;
 class Local extends LlmAdapter {
   async listModels(provider){return (provider==='deepseek-test'?['alpha']:['beta','legacy']).map(id=>({provider,id,name:id}));}
   async resolveModel(provider,id){return (await this.listModels(provider)).some(x=>x.id===id)
-    ?{provider,id,name:id,context:{contextWindow:32000},reasoning:{efforts:['low','high'].map(id=>({id,name:id}))}}
+    ?{provider,id,name:id,context:{contextWindow:reuse?262144:32000},reasoning:{efforts:['low','high'].map(id=>({id,name:id}))}}
     :null;}
   async *stream(options){
     const commands=[
+      ...(reuse&&reusableTask?[
+        [/Reuse original review|复用模型原会话/i,'schedule_admin_change_reused_model',{id:reusableTask.id,model:'alpha',thinking:'高'}],
+        [/Reuse dedicated review|复用模型新会话/i,'schedule_admin_change_reused_model',{id:reusableTask.id,model:'beta',thinking:'高'}],
+      ]:[]),
       ...(central?[
         [/管理台列表|Admin inventory/i,'schedule_admin_model_list',{}],
         [/管理台批量更新|Admin batch update/i,'schedule_admin_model_batch_update',{ids:centralIDs,model:'alpha',thinking:'高'}],
@@ -65,6 +71,22 @@ export function apply(ctx){
         target:{kind:'new',create:{cwd,agentPreset:'schedule-beta'}},
       },session.sessionId);
       log('seed',{session:session.sessionId,id:task.id});
+      if(reuse){
+        const receiving=await ctx.sessionController.create({workspaceId:workspace.id,agentPreset:'standard'});
+        const {agent:receivingAgent}=await ctx.sessionController.resolveAgent(receiving.sessionId);
+        receivingAgent.model.select({provider:'local-test',model:'beta',reasoningEffort:'low'});
+        const other=await ctx.sessionController.create({workspaceId:workspace.id,agentPreset:'schedule-model-management'});
+        const timing={kind:'every',every_seconds:3600};
+        const target={kind:'session',sessionId:receiving.sessionId};
+        reusableTask=await ctx.schedule.create({title:'共享目标任务 A',prompt,timing,target},session.sessionId);
+        const sibling=await ctx.schedule.create({title:'共享目标任务 B',prompt,timing,target},session.sessionId);
+        log('reuse-ready',{manager:other.sessionId,receiving:receiving.sessionId,task:reusableTask.id,sibling:sibling.id});
+        const signal=new AbortController().signal;
+        await ctx.sessionController.prompt({requestId:'receiving-'+randomUUID(),sessionId:receiving.sessionId,
+          mode:'queue',content:[{type:'text',text:'Original receiving conversation context.'}]},signal);
+        await ctx.sessionController.prompt({requestId:'reuse-admin-'+randomUUID(),sessionId:other.sessionId,
+          mode:'queue',content:[{type:'text',text:'Reused receiving session GUI fixture ready.'}]},signal);
+      }
       if(central){
         const otherCwd=cwd+'-other';
         mkdirSync(otherCwd,{recursive:true});

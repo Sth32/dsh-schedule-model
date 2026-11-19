@@ -43,8 +43,15 @@ dsh plugin --profile web add https://github.com/Sth32/dsh-schedule-model.git
 
 > 把「值班巡检」和「未分组周报」换成 BigFree，高思考；其他设置不变。
 
-由 Agent 找任务，不用手抄 ID。用 DSH 确认卡核对这一批任务和模型后点「允许一次」。普通会话仍按原归属限制。只在当前 DSH Host 里操作，并将覆盖写入当前 profile；不会写入其他 profile 或机器。复用会话任务能查，但不能按单条改；如未配置单独模型、不知道自定义预设最终会选什么，按原生默认或未知显示，不把默认值冒充实跑。
+由 Agent 找任务，不用手抄 ID。用 DSH 确认卡核对这一批任务和模型后点「允许一次」。普通会话仍按原归属限制。只在当前 DSH Host 里操作，并将覆盖写入当前 profile；不会写入其他 profile 或机器。查询区分任务配置和原生默认；不把默认值冒充实跑。
 
-兼容声明：DSH 0.2.2 系列（rc.1 起）。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包](dist/dsh-schedule-model-0.1.7.tgz)
+对于复用会话的旧任务，也可直接说「把这条任务换成 BigFree，高思考」。DSH 会同时说明两条路，再仅对选中的方案发出一次审批：
+
+- **改原会话**：保留原对话（DSH 切换模型时仍可能按原规则压缩上下文）；该会话后续对话和所有绑定到它的任务都换模型。原会话须已打开、空闲且预设兼容。保存设置不等于已跑通；旧历史过长或新模型窗口太小时，DSH 可能在首次请求拒绝切换。
+- **新开专用会话**：只给这条任务换一次执行会话，后续继续复用新会话；不复制旧上下文。原任务 ID、规则和历史保留，旧会话和其他任务不动。
+
+方案不可用会说明原因，不自动换成另一方案。未选择、取消或拒绝审批都不修改。
+
+兼容声明：DSH 0.2.2 系列（rc.1 起）。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包](dist/dsh-schedule-model-0.1.8.tgz)
 
 维护者：[维护指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/MAINTENANCE.md) · [测试指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/TESTING.md)。

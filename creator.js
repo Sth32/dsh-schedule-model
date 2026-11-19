@@ -6,6 +6,9 @@ import { resolveNatural, naturalTiming, validateNaturalRoute } from './natural.j
 import { defineTool, delegationDepthOf } from './tool.js';
 import { createScheduleOverrides } from './schedule-override.js';
 import { registerScheduleAdmin } from './schedule-admin.js';
+import { registerReuseAdmin } from './reuse-admin.js';
+import { prepareReceivingSessionModel } from './receiving-session-model.js';
+import { planDedicated, applyDedicated } from './dedicated-session.js';
 
 export const name = 'schedule-model-create';
 export const inject = ['schedule', 'tools', 'agentPresets', 'sessionController', 'llm', 'sessions', 'systemPrompt'];
@@ -65,6 +68,12 @@ export function apply(ctx, config) {
       adminCtx.effect(() => registerScheduleAdmin(adminCtx,current,{
         managementPreset:config.managementPreset,routes,
       }), 'schedule-model.host-owner-management');
+      adminCtx.inject(['userQuestions','workspaceRegistry','sessionPersistence'], reuseCtx=>{
+        reuseCtx.effect(()=>registerReuseAdmin(reuseCtx,{
+          managementPreset:config.managementPreset,routes,prepareReceiving:prepareReceivingSessionModel,
+          prepareDedicated:planDedicated,commitDedicated:applyDedicated,
+        }), 'schedule-model.host-reused-session-management');
+      });
     });
   });
   ctx.effect(() => registerNatural(ctx, routes), 'schedule-model.natural');
@@ -72,7 +81,7 @@ export function apply(ctx, config) {
     name:'tool:schedule-model-natural',
     order:ctx.systemPrompt.getSectionOrder('TOOL_SCHEDULE'),
     text:({scope})=>ctx.tools.get('schedule_create_with_model',scope)
-      ?'For an existing task associated with this conversation, use schedule_update_model to change only the model or thinking level. In the management conversation, use the owner-approved schedule_admin_model_list and schedule_admin_model_batch_update for cross-conversation or multi-workspace requests. Preserve the recurrence and all other settings. For an explicit request to remove/reset an existing model override and restore the original preset/default, use schedule_clear_model. When showing a task, explain any pending reservation or skipped override, and do not describe a native receipt as model execution. If the relevant tool is unavailable or the target is not a fresh session per run, report that the change is not supported; never recreate or retarget it. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
+      ?'For an existing task associated with this conversation, use schedule_update_model to change only the model or thinking level. In the management conversation, use the owner-approved schedule_admin_model_list and schedule_admin_model_batch_update for cross-conversation or multi-workspace requests. Preserve the recurrence and all other settings. For an explicit request to remove/reset an existing model override and restore the original preset/default, use schedule_clear_model. When showing a task, explain any pending reservation or skipped override, and do not describe a native receipt as model execution. Existing tasks that reuse a receiving session do not support a task-level override. In the management conversation use schedule_admin_change_reused_model, if available, to offer and approve the two distinct session options. Otherwise explain why no change was made. Never create or retarget an existing task as a workaround. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
       :'',
   });
   ctx.effect(() => registerQuery(ctx, routes, task => overrides?.state(task)), 'schedule-model.query');
