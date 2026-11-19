@@ -17,14 +17,14 @@ function fakeAgent(sessionId=delivery){
   return agent;
 }
 
-async function fixture(t){
+async function fixture(t,matchingTask){
   const dir=await mkdtemp(join(tmpdir(),'dsh-override-'));
   t.after(()=>rm(dir,{force:true,recursive:true}));
   const target={kind:'new',create:{cwd:'/keep-cwd',agentPreset:'ptc-preset'}};
   const task={id,title:'test',target,timing:{kind:'rrule',rrule:'UNCHANGED'},involvedSessionIds:[owner]};
   const stored={record:{id},target:structuredClone(target),pendingDelivery:{targetSessionId:delivery}};
   let hook,tool;
-  const calls={checks:[],flushes:[]};
+  const calls={checks:[],flushes:[],ownedLookups:[]};
   const ctx={
     profileContext:{dir},
     storageDomain:{get:name=>{assert.equal(name,'schedule');return {table:name=>{
@@ -32,7 +32,7 @@ async function fixture(t){
     }};}},
     schedule:{},
     sessionController:{modelCatalog:async()=>({groups:[{id:route.provider,models:[
-      {id:route.model,name:'Alpha',reasoning:{efforts:[{id:'low',name:'Low'}]}},
+      {id:route.model,name:'Alpha',reasoning:{efforts:[{id:'low',name:'Low'},{id:'medium',name:'Medium'}]}},
     ]}]})},
     llm:{resolveCallConfig:async selected=>{calls.checks.push(selected);}},
     agents:{turnBoundaryOf:()=>({lastTurn:0,openTurnStartSeq:null})},
@@ -44,8 +44,9 @@ async function fixture(t){
     const plugin=createScheduleOverrides(ctx);
     plugin.registerDeliveryHook();
     plugin.registerTool(async(_schedule,key,actor)=>{
+      calls.ownedLookups.push({key,actor});
       if(actor!==owner||![id,task.title].includes(key))return {error:{code:'not_found_in_session'}};
-      return {task};
+      return matchingTask?matchingTask(task,calls.ownedLookups.length):{task};
     });
     return plugin;
   };
@@ -120,4 +121,47 @@ test('still-blank agent pins an equal fallback while started attempt retains onl
   const recovered=fakeAgent();
   recovered.before=route;
   assert.deepEqual((await f.run(delivery,recovered)).selections,[]);
+});
+
+
+test('failed model validation or failed authoritative task lookup preserves the previous override',async t=>{
+  let failure;
+  const f=await fixture(t,(task,index)=>{
+    if(index===4 && failure==='lookup')throw new Error('schedule view RPC failed');
+    if(index===4 && failure==='access')return {error:{code:'not_found_in_session'}};
+    if(index===4 && failure==='changed')return {task:{...task,target:{kind:'session',sessionId:owner}}};
+    return {task};
+  });
+  await f.edit();
+  const previous=await readFile(f.path,'utf8');
+  f.ctx.llm.resolveCallConfig=async()=>{throw new Error('selected model no longer available');};
+  await assert.rejects(f.edit({thinking:'medium'}),/no longer available/);
+  assert.equal(await readFile(f.path,'utf8'),previous);
+  f.ctx.llm.resolveCallConfig=async()=>{};
+  for(const scenario of ['lookup','access','changed']){
+    failure=scenario;
+    f.calls.ownedLookups.length=2;
+    if(scenario==='lookup')await assert.rejects(f.edit({thinking:'medium'}),/schedule view RPC failed/);
+    else assert.equal((await f.edit({thinking:'medium'})).code,
+      scenario==='access'?'not_found_in_session':'schedule_target_changed');
+    assert.deepEqual(f.calls.ownedLookups.slice(2).map(x=>x.key),['test',id]);
+    assert.equal(await readFile(f.path,'utf8'),previous);
+  }
+});
+
+test('two deliveries on one task are isolated; a re-edit only affects its next reservation in this profile',async t=>{
+  const f=await fixture(t), another=await fixture(t);
+  const first=fakeAgent();
+  await f.edit();
+  await f.run(delivery,first);
+  assert.deepEqual(first.selections,[route]);
+  const next='session-run-next';
+  f.stored.pendingDelivery.targetSessionId=next;
+  await f.edit({thinking:'medium',model:'Alpha'});
+  assert.deepEqual(await another.plugin.configured(another.task),null);
+  assert.deepEqual((await another.run(delivery)).selections,[]);
+  const second=await f.run(next);
+  assert.deepEqual(first.selections,[route]);
+  assert.deepEqual(second.selections,[{...route,reasoningEffort:'medium'}]);
+  assert.deepEqual(f.calls.flushes,[delivery,next]);
 });

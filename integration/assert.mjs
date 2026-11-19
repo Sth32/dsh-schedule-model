@@ -40,3 +40,15 @@ console.log('PASS: clean install, natural chat, native schedule, cwd/preset deli
 
 assert.deepEqual(by('override_manual_timer_cwd_preset_ok'), [true]);
 assert.deepEqual(by('override_restart_ok'), [true]);
+
+if(process.env.DSH_E2E_UPGRADE_FROM){
+ assert.equal(by('upgrade_seed').length,1);
+ assert.deepEqual(by('upgrade_retained'),by('upgrade_seed'));
+ assert.deepEqual(by('upgrade_restart'),by('upgrade_seed'));
+ console.log('PASS: actual local plugin upgrade retains the same native task through restart');
+}
+if(process.env.DSH_E2E_LONG_HISTORY==='1'){
+ assert.deepEqual(by('native_repeat_history_ok'),[true]);
+ assert.deepEqual(by('native_repeat_restart_ok'),[true]);
+ console.log('PASS: actual repeated delivery honors cadence floor, keeps both receipts, pages by cursor and persists old route');
+}

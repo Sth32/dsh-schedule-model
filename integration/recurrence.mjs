@@ -21,3 +21,25 @@ assert.deepEqual(next({dailyTimes:['02:30','08:00','17:30'],timeZone:'America/Ne
  '2026-03-09T12:00:00.000Z','2026-03-09T21:30:00.000Z',
 ]);
 console.log('PASS: actual DSH recurrence expands only exact daily pairs, including spring-forward gaps');
+
+// The engine permits BYSETPOS through 366. 19 hours × 20 minutes
+// deliberately reaches that position without exceeding 31 requested pairs.
+const hh=n=>String(n).padStart(2,'0');
+const boundary=[
+ ...Array.from({length:18},(_,i)=>`${hh(i)}:${hh(i)}`),
+ '00:18','00:19','18:05',
+].sort();
+const boundaryTiming={dailyTimes:boundary,timeZone:'UTC'};
+assert.match(naturalTiming(boundaryTiming).rrule,/,366$/);
+const boundaryResult=next(boundaryTiming,'2026-11-18T23:59:59.999Z',boundary.length+1);
+assert.deepEqual(boundaryResult,boundary.map(time=>`2026-11-19T${time}:00.000Z`).concat('2026-11-20T00:00:00.000Z'));
+assert.throws(()=>naturalTiming({timeZone:'UTC',
+ dailyTimes:boundary.map(time=>time==='18:05'?'18:06':time),
+}),/position range/);
+
+// Strictly after the bound; checking inclusive vs exclusive prevents
+// re-delivery at the same scheduled instant.
+assert.deepEqual(next({dailyTimes:['08:00','08:01'],timeZone:'UTC'},'2026-11-19T08:00:00.000Z',2),[
+ '2026-11-19T08:01:00.000Z','2026-11-20T08:00:00.000Z',
+]);
+console.log('PASS: DSH exact position 366 and strict next-occurrence boundary');

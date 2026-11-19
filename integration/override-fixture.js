@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {tmpdir} from 'node:os';
 
 const title='Existing PTC-like recurring override';
 const unaffectedTitle='Other task, same preset';
+const longHistory=process.env.DSH_E2E_LONG_HISTORY==='1';
 const timedTitle='Native timer override';
 const schedulePrompt='Reply with fixture-ok only.';
 const rrule='DTSTART;TZID=Asia/Shanghai:20261119T043000\nRRULE:FREQ=DAILY;BYHOUR=4,12,18;BYMINUTE=30';
@@ -17,15 +17,22 @@ export async function verifyOverrides(ctx,log,restart=false) {
     const {agent}=await ctx.sessionController.resolveAgent(task.involvedSessionIds[0]);
     const q=ctx.tools.get('schedule_view_model');
     const result=JSON.parse(await q.execute({identifier:task.id},{agent,signal:new AbortController().signal}));
-    assert.deepEqual(result.configured,{provider:'deepseek-test',model:'alpha',reasoningEffort:'high'});
+    assert.deepEqual(result.configured,{provider:'deepseek-test',model:'alpha',reasoningEffort:longHistory?'low':'high'});
     assert.equal(result.latestRun.requested?.model,'alpha');
     assert.equal(task.target.kind,'new');
     assert.equal(task.target.create.agentPreset,'schedule-beta');
     assert.equal(task.rrule,rrule);
     log('override_restart_ok',true);
+    if(longHistory){
+      const retained=await ctx.schedule.history({id:task.id,limit:2});
+      assert.equal(retained.records.length,2);
+      assert.notEqual(retained.records[0].targetSessionId,retained.records[1].targetSessionId);
+      assert.equal(result.latestRun.requested?.reasoningEffort,'low');
+      log('native_repeat_restart_ok',true);
+    }
     return;
   }
-  const cwd=join(tmpdir(),'dsh-override-sample-workspace');
+  const cwd=join(process.env.DSH_HOME,'dsh-override-sample-workspace');
   mkdirSync(cwd,{recursive:true});
   const {sessionId}=await ctx.sessionController.create({cwd});
   const {agent}=await ctx.sessionController.resolveAgent(sessionId);
@@ -74,4 +81,34 @@ export async function verifyOverrides(ctx,log,restart=false) {
   assert.deepEqual(otherSeen.latestRun.requested,{provider:'local-test',model:'beta',reasoningEffort:'low'});
   assert.deepEqual(timedSeen.latestRun.requested,{provider:'deepseek-test',model:'alpha',reasoningEffort:'high'});
   log('override_manual_timer_cwd_preset_ok',true);
+  if(longHistory){
+    const first=await ctx.schedule.history({id:before.id,limit:1});
+    assert.equal(first.records.length,1);
+    const firstReceipt=first.records[0];
+    const oldRequest=seen.latestRun.requested;
+    await edit.execute({identifier:before.id,model:'alpha',thinking:'low'},exec);
+    assert.deepEqual((await peek(before.id)).latestRun.requested,oldRequest,
+      'changing config must not label the old run with the new route');
+    assert.equal((await ctx.schedule.run({id:before.id})).code,'schedule_execution_pending');
+    const minimumUntil=Date.parse(row.deliveryFloorEndsAt);
+    assert.ok(Number.isFinite(minimumUntil));
+    await new Promise(resolve=>setTimeout(resolve,Math.max(0,minimumUntil-Date.now())+250));
+    const repeated=await ctx.schedule.run({id:before.id});
+    assert.ok(repeated.lastDelivery);
+    assert.notEqual(repeated.lastDelivery.targetSessionId,firstReceipt.targetSessionId);
+    const latest=await ctx.schedule.history({id:before.id,limit:1});
+    assert.equal(latest.records.length,1);
+    assert.equal(latest.records[0].targetSessionId,repeated.lastDelivery.targetSessionId);
+    assert.ok(latest.nextBefore);
+    const older=await ctx.schedule.history({id:before.id,limit:1,before:latest.nextBefore});
+    assert.deepEqual(older.records,[firstReceipt]);
+    assert.equal(older.earlierRecordsPruned,false);
+    for(let i=0;i<25;i++){
+      if((await peek(before.id)).latestRun.requested?.reasoningEffort==='low')break;
+      await new Promise(resolve=>setTimeout(resolve,150));
+    }
+    assert.equal((await peek(before.id)).latestRun.requested?.reasoningEffort,'low');
+    assert.equal(recipient.model.current().reasoningEffort,'high');
+    log('native_repeat_history_ok',true);
+  }
 }

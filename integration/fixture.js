@@ -37,9 +37,41 @@ export function apply(ctx) {
   ctx.effect(()=>ctx.llm.registerAdapter(['local-test','deepseek-test'],new Local()), 'fixture-adapter');
   const timer=setTimeout(async()=>{
     try {
+      if(process.env.DSH_E2E_REMOVAL_PROBE==='seed'){
+        const {sessionId}=await ctx.sessionController.create({});
+        const {agent}=await ctx.sessionController.resolveAgent(sessionId);
+        const row=await ctx.schedule.create({title:'Removal route-loss probe',prompt:'Reply with fixture-ok only.',
+          timing:{kind:'every',every_seconds:3600},target:{kind:'new',create:{}}},sessionId);
+        const update=ctx.tools.get('schedule_update_model');
+        const configured=JSON.parse(await update.execute({identifier:row.id,model:'ds',thinking:'低'},{agent}));
+        if(configured.configured?.model!=='alpha')throw new Error('Probe did not commit an override');
+        log('removal_probe_seed',row.id);
+        return;
+      }
+      if(process.env.DSH_E2E_REMOVAL_PROBE==='verify'){
+        if(ctx.tools.get('schedule_update_model'))throw new Error('Plugin was not removed');
+        const prior=(await ctx.schedule.list()).items.find(x=>x.title==='Removal route-loss probe');
+        if(!prior)throw new Error('Native task missing when plugin is absent');
+        const delivered=await ctx.schedule.run({id:prior.id});
+        if(!delivered.lastDelivery)throw new Error('Native task did not deliver after uninstall');
+        const {agent}=await ctx.sessionController.resolveAgent(delivered.lastDelivery.targetSessionId);
+        log('removal_probe_actual',{id:prior.id,route:agent.model.current()});
+        return;
+      }
+      if(process.env.DSH_E2E_UPGRADE_SEED==='1'){
+        if(ctx.tools.get('schedule_update_model'))throw new Error('Old upgrade seed already has the 0.1.5 tool');
+        const row=await ctx.schedule.create({title:'Upgrade-retained task',prompt:'Fixture state retained',
+          timing:{kind:'every',every_seconds:3600},target:{kind:'new',create:{agentPreset:'schedule-beta'}}});
+        log('upgrade_seed',row);
+        return;
+      }
+      if(process.env.DSH_E2E_UPGRADE_FROM){
+        const row=(await ctx.schedule.list()).items.find(x=>x.title==='Upgrade-retained task');
+        log(process.env.DSH_E2E_RESTART==='1'?'upgrade_restart':'upgrade_retained',row);
+      }
       if (process.env.DSH_E2E_RESTART === '1') {
         const rows = (await ctx.schedule.list()).items;
-        log('restart',rows.map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
+        log('restart',rows.filter(e=>e.title!=='Upgrade-retained task').map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
         const multi=rows.find(row=>row.title==='multi');
         const {agent:multiAgent}=await ctx.sessionController.resolveAgent(multi.target.sessionId);
         log('multi_restart',{preset:multiAgent.session.header.agentPreset,
