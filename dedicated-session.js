@@ -2,7 +2,7 @@
 // No task edit or Session creation occurs in preflight.
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, win32 } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { validateNaturalRoute } from './natural.js';
 
@@ -22,6 +22,33 @@ const snapshot=task=>{
 };
 const effectiveSignal=signal=>signal??new AbortController().signal;
 
+// Use the same fully-qualified rule as DSH Workspace. On Windows a
+// drive-root-relative spelling is 'absolute' to node:path but still ambiguous.
+function fullyQualified(value){
+  if(typeof value!=='string'||!isAbsolute(value))return false;
+  if(process.platform!=='win32')return true;
+  const root=win32.parse(value).root;
+  return root!=='\\'&&root!=='/';
+}
+
+async function directory(value){
+  if(!fullyQualified(value))return null;
+  const cwd=await realpath(value);
+  const [source,canonical]=await Promise.all([stat(value,{bigint:true}),stat(cwd,{bigint:true})]);
+  if(!source.isDirectory()||!canonical.isDirectory()||canonical.ino===0n||
+      source.dev!==canonical.dev||source.ino!==canonical.ino)return null;
+  return {cwd,dev:canonical.dev,ino:canonical.ino};
+}
+
+function sameDirectory(a,b){
+  return !!a&&!!b&&a.dev===b.dev&&a.ino===b.ino;
+}
+
+function sameDedicatedLocation(actual,expected){
+  return actual?.ok===true&&sameDirectory(actual,expected)&&actual.workspaceId===expected.workspaceId&&
+    actual.workspaceTitle===expected.workspaceTitle&&actual.preset===expected.preset;
+}
+
 async function lookup(ctx,id){
   const task=await ctx.schedule.view({id});
   return task?.id===id&&task.target?.kind==='session'&&typeof task.target.sessionId==='string'
@@ -34,24 +61,30 @@ async function source(ctx,sessionId,signal){
   const saved=await ctx.sessionPersistence.stat(sessionId,{signal});
   if(!saved||saved.header.id!==sessionId||saved.header.origin==='subagent'||(saved.header.delegationDepth??0)>0)
     return no('source_session_unavailable');
-  if(typeof saved.header.cwd!=='string'||!isAbsolute(saved.header.cwd))return no('source_directory_unavailable');
-  let cwd;
-  try{
-    cwd=await realpath(saved.header.cwd);
-    if(!(await stat(cwd)).isDirectory())return no('source_directory_unavailable');
-  }catch{return no('source_directory_unavailable');}
+  let identity;
+  try{identity=await directory(saved.header.cwd);}catch{}
+  if(!identity)return no('source_directory_unavailable');
   signal.throwIfAborted();
   const matches=registry.list().filter(workspace=>workspace.sessionIds.includes(sessionId));
-  if(matches.length>1||(matches[0]&&matches[0].path!==cwd))return no('source_workspace_unavailable');
+  if(matches.length>1)return no('source_workspace_unavailable');
+  const workspace=matches[0];
+  if(workspace){
+    if(typeof workspace.id!=='string'||!workspace.id)return no('source_workspace_unavailable');
+    // The registry supplies membership, not permission to assume its saved
+    // path spelling is current. Verify the two filesystem identities.
+    let workspaceIdentity;
+    try{workspaceIdentity=await directory(workspace.path);}catch{}
+    if(!sameDirectory(identity,workspaceIdentity))return no('source_workspace_unavailable');
+  }
+  signal.throwIfAborted();
   const projected=await ctx.sessionController.projections({sessionId},signal);
   if(projected?.kind!=='sequenced'||!Object.hasOwn(projected.values??{},'agentPreset'))
     return no('source_preset_unverified');
   const preset=projected.values.agentPreset??ctx.agentPresets.defaultId;
   if(!label(preset))return no('source_preset_unverified');
-  const workspace=matches[0];
-  const workspaceTitle=workspace&&typeof workspace.title==='string'&&workspace.title!==workspace.path
+  const workspaceTitle=workspace&&typeof workspace.title==='string'&&workspace.title!==workspace.path&&workspace.title!==identity.cwd
     ?display(workspace.title):null;
-  return {ok:true,cwd,workspaceId:workspace?.id??null,workspaceTitle,preset};
+  return {ok:true,...identity,workspaceId:workspace?.id??null,workspaceTitle,preset};
 }
 
 function preservePresetRoute(preset,route,routes){
@@ -168,7 +201,7 @@ export async function applyDedicated(ctx,plan,signal,{verifyScope=()=>true}={}){
       const combined=AbortSignal.any([signal,maintenanceSignal]);
       if(!blank(ctx,agent,candidateId))return unbound('new_session_not_blank');
       const actual=await source(ctx,candidateId,combined);
-      if(!isDeepStrictEqual(actual,location))return unbound('new_session_location_unverified');
+      if(!sameDedicatedLocation(actual,location))return unbound('new_session_location_unverified');
       if(!blank(ctx,agent,candidateId))return unbound('new_session_not_blank');
       combined.throwIfAborted();
       agent.model.select(route);
@@ -183,6 +216,14 @@ export async function applyDedicated(ctx,plan,signal,{verifyScope=()=>true}={}){
       if(!blank(ctx,agent,candidateId)||!exact(agent.model.current(),route))
         return unbound('new_session_not_blank');
       combined.throwIfAborted();
+      if(!await verifyScope())return unbound('management_scope_changed');
+      // Approval and staging are async. Recheck both native bindings as
+      // well as their exact directory identities immediately before CAS.
+      const [originalBeforeEdit,dedicatedBeforeEdit]=await Promise.all([
+        source(ctx,oldSessionId,combined),source(ctx,candidateId,combined),
+      ]);
+      if(!isDeepStrictEqual(originalBeforeEdit,location))return unbound('source_location_changed');
+      if(!sameDedicatedLocation(dedicatedBeforeEdit,location))return unbound('new_session_location_unverified');
       if(!await verifyScope())return unbound('management_scope_changed');
       if(!blank(ctx,agent,candidateId)||!exact(agent.model.current(),route))
         return unbound('new_session_not_blank');

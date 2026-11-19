@@ -45,6 +45,8 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 3. 发送 `Reuse dedicated review`，选择新开并允许一次。A 开始使用没有旧上下文的新会话（模拟请求 `beta/high`）；B 仍指向原会话，旧回执保留，原生规则不改。预览不创建会话。
 4. 另测取消、失效/拒绝、选项不可用、排队中的会话、并发修改、会话创建后目标更新失败的恢复信息。不能把任意供应商、Windows 或不受信任的宿主插件算作已验。
 
+专用会话的目录校验回归：`node --test dedicated-session.test.js`。可移植夹具使用目录符号链接（Windows 用 junction），验证两个路径拼法确实指向同一目录，且任务仍绑定原 Workspace ID。目录丢失、仅前缀相同、路径被重新指向、同名目录被替换，或新旧会话丢失已审批的工作区绑定，都不得改定时任务。Windows 的真实 8.3 用例通过系统 `GetShortPathName` 获取短路径，仅在该卷确实提供短别名时执行；否则明确跳过。Windows 复核还应在系统默认 TMP 及长路径 TMP 下各跑完整套件。
+
 ## 回归矩阵
 
 | 场景 | 检查通过条件 | 证据 |
