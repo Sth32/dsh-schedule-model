@@ -6,6 +6,8 @@ export const name='local-dsh-schedule-gui';
 export const inject=['llm','schedule','sessionController','workspaceRegistry'];
 const log=(event,value)=>appendFileSync(process.env.DSH_E2E_LOG,JSON.stringify({event,value})+'\n');
 const prompt='Confirm in one line that this scheduled fixture ran.';
+const central=process.env.DSH_GUI_CENTRAL==='1';
+const centralIDs=[];
 class Local extends LlmAdapter {
   async listModels(provider){return (provider==='deepseek-test'?['alpha']:['beta','legacy']).map(id=>({provider,id,name:id}));}
   async resolveModel(provider,id){return (await this.listModels(provider)).some(x=>x.id===id)
@@ -13,6 +15,11 @@ class Local extends LlmAdapter {
     :null;}
   async *stream(options){
     const commands=[
+      ...(central?[
+        [/管理台列表|Admin inventory/i,'schedule_admin_model_list',{}],
+        [/管理台批量更新|Admin batch update/i,'schedule_admin_model_batch_update',{ids:centralIDs,model:'alpha',thinking:'高'}],
+        [/管理台批量清除|Admin batch clear/i,'schedule_admin_model_batch_update',{ids:centralIDs,action:'clear'}],
+      ]:[]),
       [/创建GUI三段任务|Create the three-time GUI task/i,'schedule_create_with_model',{title:'GUI三段任务',prompt,model:'alpha',thinking:'低',dailyTimes:['04:30','12:30','18:30'],timeZone:'Asia/Shanghai'}],
       [/把GUI旧任务改成|Change the existing GUI task/i,'schedule_update_model',{identifier:'GUI旧任务',model:'alpha',thinking:'高'}],
       [/撤销GUI旧任务|Clear the existing GUI task/i,'schedule_clear_model',{identifier:'GUI旧任务'}],
@@ -58,6 +65,24 @@ export function apply(ctx){
         target:{kind:'new',create:{cwd,agentPreset:'schedule-beta'}},
       },session.sessionId);
       log('seed',{session:session.sessionId,id:task.id});
+      if(central){
+        const otherCwd=cwd+'-other';
+        mkdirSync(otherCwd,{recursive:true});
+        await ctx.workspaceRegistry.create(otherCwd);
+        const admin=await ctx.sessionController.create({workspaceId:workspace.id,agentPreset:'schedule-model-management'});
+        for(let i=1;i<=10;i++){
+          // No acting Session: represents tasks made in the native manager.
+          const row=await ctx.schedule.create({title:`管理台假任务 ${i}`,prompt:'PRIVATE-QA-PROMPT',
+            timing:{kind:'rrule',rrule:'DTSTART;TZID=Asia/Shanghai:20261119T043000\nRRULE:FREQ=DAILY;BYHOUR=4,12,18;BYMINUTE=30'},
+            target:{kind:'new',create:{...(i<=4?{cwd}:i<=7?{cwd:otherCwd}:{}),agentPreset:'schedule-beta'}}});
+          centralIDs.push(row.id);
+        }
+        await ctx.schedule.create({title:'管理台只读复用任务',prompt:'PRIVATE-QA-REUSED',
+          timing:{kind:'after',after_seconds:3600},target:{kind:'session',sessionId:session.sessionId}});
+        log('admin-ready',{session:admin.sessionId,tasks:[...centralIDs]});
+        await ctx.sessionController.prompt({requestId:'admin-'+randomUUID(),sessionId:admin.sessionId,
+          mode:'queue',content:[{type:'text',text:'Central schedule owner fixture ready.'}]},new AbortController().signal);
+      }
       await ctx.sessionController.prompt({requestId:'seed-'+randomUUID(),sessionId:session.sessionId,
         mode:'queue',content:[{type:'text',text:'GUI QA workspace fixture ready.'}]},new AbortController().signal);
     }catch(e){log('seed-error',String(e.stack));}

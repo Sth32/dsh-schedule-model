@@ -27,6 +27,15 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 4. 在原对话发送「撤销GUI旧任务的模型覆盖」，再查询，配置来源恢复到预设，历史仍显示之前的 `alpha/high`，原生任务列表不出现新副本。英文：`Clear the existing GUI task`。
 5. 取证只记测试版本和脱敏结果，关闭测试 Host。这个夹具按固定话术驱动工具调用，不证明任意自然语言或真实供应商都能正确路由。Windows/Desktop 和从 GUI 安装另做环境验收。
 
+### 跨会话管理验收
+
+用 `DSH_GUI_CENTRAL=1 bash integration/gui.sh /path/to/isolated-dsh-npm-prefix [port]` 启动。夹具在两个注册工作区及未分组建立十条无创建会话的 fresh 任务，再加一条复用任务。使用 GUI 新开会话，在模式菜单选择「定时任务管理 / Schedule Management」。
+
+- 发送 `Admin inventory`。确认原生卡出现，点击「允许一次」后，结果包括三种工作区分组及只读复用任务，不出现夹具的私有测试提示词。
+- 发送 `Admin batch update`。拒绝后不变；再发送并核对审批列出准确的十条任务和 `alpha/high`。批准后十条返回已修改。原生列表仍保持原任务与规则；从未分组的第九条点「立即执行」，在运行记录核对接收的模拟模型为 `alpha/high`。
+- 发送 `Admin batch clear`。核对审批显示十条旧覆盖，允许后十条撤销；既有回执不受影响。另测试普通会话、无 GUI owner、审批超时和预览后外部变更的拒绝路径。
+- 夹具使用确定性的模拟模型触发工具，不代表实测具体供应商或每一种自然语言表达。Windows Desktop 单独验证。
+
 ## 回归矩阵
 
 | 场景 | 检查通过条件 | 证据 |

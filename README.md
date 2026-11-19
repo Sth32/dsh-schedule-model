@@ -7,6 +7,7 @@
 - **指定模型和思考等级**：任务照常出现在 DSH 原生「自动化任务」列表。
 - **一天多个时刻只建一条任务**：默认继承当前工作目录，也可指定目录。
 - **旧任务只换模型**：对每次新开会话的任务，保留原时间、目录、预设和运行历史。也可撤销覆盖，恢复原预设或默认模型。查询会区分配置来源、待投递和 DSH 已记录的实际请求。
+- **在一个会话管理所有工作区**：可选的「定时任务管理」模式，集中查看当前、其他和未分组任务的模型配置；一次审批可为最多 10 条每次新开会话的既有任务设置、修改或撤销覆盖。
 
 原生页面继续管理时间和运行记录；模型通过对话设置，不会在原生编辑页增加字段。复用会话的旧任务不自动迁移。**禁用或卸载插件前，先暂停依赖模型覆盖的任务**；原生任务不会随插件一起停。
 
@@ -30,6 +31,20 @@ dsh plugin --profile web add https://github.com/Sth32/dsh-schedule-model.git
 
 修改和撤销适用于**原本每次新开会话的旧任务**。自然语言新建时使用专用会话，同一任务每次复用它；删除任务不会自动删除会话。首次验证：在「自动化任务」里找到对应任务，点「立即执行」，再回原对话查询模型。查询的是 DSH 记录的请求，不代表供应商最终实际使用的模型。
 
-兼容声明：DSH 0.2.2 系列（rc.1 起）。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包](dist/dsh-schedule-model-0.1.6.tgz)
+**跨工作区管理**：在当前 DSH profile 的 `cordis.patch.yml` 中为插件加一次配置，重启后新开会话，选择「定时任务管理 / Schedule Management」。如果已有这一行的 `config`，只添加字段，保留原来的 `routes`。
+
+```yaml
+- id: schedule-model-natural
+  config:
+    managementPreset: schedule-model-management
+```
+
+> 看一下当前、其他工作区和未分组的定时任务分别配置了什么模型。
+
+> 把「值班巡检」和「未分组周报」换成 BigFree，高思考；其他设置不变。
+
+由 Agent 找任务，不用手抄 ID。用 DSH 确认卡核对这一批任务和模型后点「允许一次」。普通会话仍按原归属限制。只在当前 DSH Host 里操作，并将覆盖写入当前 profile；不会写入其他 profile 或机器。复用会话任务能查，但不能按单条改；如未配置单独模型、不知道自定义预设最终会选什么，按原生默认或未知显示，不把默认值冒充实跑。
+
+兼容声明：DSH 0.2.2 系列（rc.1 起）。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包](dist/dsh-schedule-model-0.1.7.tgz)
 
 维护者：[维护指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/MAINTENANCE.md) · [测试指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/TESTING.md)。

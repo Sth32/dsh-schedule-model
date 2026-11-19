@@ -122,6 +122,20 @@ export function createScheduleOverrides(ctx){
   }
 
   return {
+    async commitConfirmed(id,selected,signal,confirmCurrent,before){
+      return serialize(id,async()=>{
+        signal.throwIfAborted();
+        if(!await confirmCurrent())return 'stale_task';
+        const current=await store.read(id);
+        if(!(current===null&&before===null)&&!exactSelection(current,before))return 'stale_override';
+        if(!await confirmCurrent())return 'stale_task';
+        signal.throwIfAborted();
+        if(selected===null)return await store.remove(id)?'changed':'unchanged';
+        if(exactSelection(current,selected))return 'unchanged';
+        await store.write(id,selected);
+        return 'changed';
+      });
+    },
     configured(task){return task.target.kind==='new'?store.read(task.id):Promise.resolve(null);},
     async state(task){
       if(task.target.kind!=='new')return {configured:null,overrideStatus:'not_applicable',pending:null,lastSkipped:null};

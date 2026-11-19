@@ -1,0 +1,21 @@
+# Select this purpose-built, low-privilege preset in a new conversation.
+# Host-wide model controls still require an owner's explicit profile opt-in.
+- insert:
+    - id: preset-schedule-model-management
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: schedule-model-management
+        name: 定时任务管理 / Schedule Management
+        description: Review and manage the model route of native scheduled tasks.
+        order: 90
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: You are the user's scheduled task management assistant.
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
