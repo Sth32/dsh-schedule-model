@@ -23,22 +23,22 @@ async function fixture(t,matchingTask){
   const target={kind:'new',create:{cwd:'/keep-cwd',agentPreset:'ptc-preset'}};
   const task={id,title:'test',target,timing:{kind:'rrule',rrule:'UNCHANGED'},involvedSessionIds:[owner]};
   const stored={record:{id},target:structuredClone(target),pendingDelivery:{targetSessionId:delivery}};
-  let hook,tool;
+  const listeners=new Map(),tools=new Map(),rows=new Map([[id,stored]]);
   const calls={checks:[],flushes:[],ownedLookups:[]};
   const ctx={
     profileContext:{dir},
     storageDomain:{get:name=>{assert.equal(name,'schedule');return {table:name=>{
-      assert.equal(name,'tasks');return new Map([[id,stored]]);
+      assert.equal(name,'tasks');return rows;
     }};}},
-    schedule:{},
+    schedule:{list:async()=>({items:[]})},
     sessionController:{modelCatalog:async()=>({groups:[{id:route.provider,models:[
       {id:route.model,name:'Alpha',reasoning:{efforts:[{id:'low',name:'Low'},{id:'medium',name:'Medium'}]}},
     ]}]})},
     llm:{resolveCallConfig:async selected=>{calls.checks.push(selected);}},
     agents:{turnBoundaryOf:()=>({lastTurn:0,openTurnStartSeq:null})},
     sessions:{flush:async session=>{calls.flushes.push(session.id);return true;}},
-    tools:{register:spec=>{tool=spec;return ()=>{};}},
-    on:(name,value)=>{assert.equal(name,'schedule/resolve-agent');hook=value;return ()=>{};},
+    tools:{register:spec=>{tools.set(spec.name,spec);return ()=>tools.delete(spec.name);}},
+    on:(name,value)=>{listeners.set(name,value);return ()=>listeners.delete(name);},
   };
   const register=()=>{
     const plugin=createScheduleOverrides(ctx);
@@ -51,10 +51,11 @@ async function fixture(t,matchingTask){
     return plugin;
   };
   const plugin=register();
-  return {dir,ctx,task,stored,calls,plugin,register,path:join(dir,'schedule-model-overrides',id+'.json'),
-    run:(session,agent=fakeAgent(session))=>hook(session,async()=>agent),
+  return {dir,ctx,task,stored,rows,calls,plugin,register,listeners,path:join(dir,'schedule-model-overrides',id+'.json'),
+    run:(session,agent=fakeAgent(session),next=async()=>agent)=>listeners.get('schedule/resolve-agent')(session,next),
+    clear:async(actor=fakeAgent(owner))=>JSON.parse(await tools.get('schedule_clear_model').execute({identifier:'test'},{agent:actor})),
     edit:async({identifier='test',model='ds',thinking='低'}={},actor=fakeAgent(owner))=>
-      JSON.parse(await tool.execute({identifier,model,thinking},{agent:actor}))};
+      JSON.parse(await tools.get('schedule_update_model').execute({identifier,model,thinking},{agent:actor}))};
 }
 
 test('update is profile-local and persists; completes fresh reserved route without touching schedule or preset',async t=>{
@@ -100,24 +101,34 @@ test('bad durable selection, removed provider, mismatched activation and persist
   await f.edit();
   await assert.rejects(f.run(delivery,fakeAgent('session-other')),/reservation/);
   f.ctx.llm.resolveCallConfig=async()=>{throw Error('provider unavailable');};
-  await assert.rejects(f.run(delivery),/provider unavailable/);
+  await assert.rejects(f.run(delivery),/route_unavailable/);
+  assert.equal((await f.plugin.state(f.task)).lastSkipped.status,'blocked_before_delivery');
   assert.deepEqual((await f.run('session-other')).selections,[]);
   f.ctx.llm.resolveCallConfig=async()=>{};
   f.ctx.sessions.flush=async()=>false;
-  await assert.rejects(f.run(delivery),/persist/);
+  const affected=fakeAgent();
+  await assert.rejects(f.run(delivery,affected),/selection_not_persisted/);
+  assert.deepEqual(affected.model.current(),affected.before,'restore known original selected route if still pre-turn');
   await writeFile(f.path,'{"version":1,"scheduleId":"wrong"}');
-  await assert.rejects(f.run(delivery),/override state/);
+  await assert.rejects(f.run(delivery),/override_unreadable/);
+  assert.equal((await f.plugin.state(f.task)).overrideStatus,'unreadable');
   assert.deepEqual((await f.run('session-other')).selections,[]);
 });
 
-test('still-blank agent pins an equal fallback while started attempt retains only an exact selection',async t=>{
+test('pre-turn next-step briefing is allowed; already-started route is left unchanged and reported',async t=>{
   const f=await fixture(t);
   await f.edit();
   const blank=fakeAgent();
-  blank.before=route;
+  blank.inbox.nextStep.push({source:{kind:'startup-memory'}});
   assert.deepEqual((await f.run(delivery,blank)).selections,[route]);
   f.ctx.agents.turnBoundaryOf=()=>({lastTurn:1,openTurnStartSeq:37});
-  await assert.rejects(f.run(delivery),/already|started/);
+  const inProgress=fakeAgent();
+  assert.equal(await f.run(delivery,inProgress),inProgress);
+  assert.deepEqual(inProgress.model.current(),inProgress.before);
+  const status=await f.plugin.state(f.task);
+  assert.deepEqual(status.pending,{status:'reserved',targetSessionId:delivery});
+  assert.equal(status.lastSkipped.reason,'session_already_started');
+  assert.equal(status.lastSkipped.status,'kept_existing_route');
   const recovered=fakeAgent();
   recovered.before=route;
   assert.deepEqual((await f.run(delivery,recovered)).selections,[]);
@@ -164,4 +175,28 @@ test('two deliveries on one task are isolated; a re-edit only affects its next r
   assert.deepEqual(first.selections,[route]);
   assert.deepEqual(second.selections,[{...route,reasoningEffort:'medium'}]);
   assert.deepEqual(f.calls.flushes,[delivery,next]);
+});
+
+
+test('native failure propagates untouched and can drive native reserved-session creation',async t=>{
+  const f=await fixture(t);
+  await f.edit();
+  const err=Object.assign(new Error('not found'),{code:'session/not-found'});
+  await assert.rejects(f.run(delivery,fakeAgent(),async()=>{throw err;}),e=>e===err);
+  assert.equal((await f.plugin.state(f.task)).lastSkipped,null);
+});
+
+test('clear requires ownership, reverts future delivery without changing native row, and is idempotent',async t=>{
+  const f=await fixture(t);
+  await f.edit();
+  const before=structuredClone(f.task);
+  assert.deepEqual(await f.clear(fakeAgent('foreign')),{code:'not_found_in_session'});
+  await assert.rejects(f.clear(Object.assign(fakeAgent(owner),{options:{subagentDepth:1}})),/root session/);
+  await writeFile(f.path,'malformed even before provider validation');
+  await assert.rejects(f.run(delivery),/override_unreadable/);
+  assert.equal((await f.clear()).cleared,true);
+  assert.equal((await f.clear()).cleared,false);
+  assert.equal((await f.plugin.state(f.task)).overrideStatus,'none');
+  assert.deepEqual((await f.run(delivery)).selections,[]);
+  assert.deepEqual(f.task,before);
 });

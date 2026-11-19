@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { apply as installPin, selection } from './index.js';
 import { inspectLatest, configuredSessionModel } from './observe.js';
-import { resolveNatural, naturalTiming } from './natural.js';
+import { resolveNatural, naturalTiming, validateNaturalRoute } from './natural.js';
 import { defineTool, delegationDepthOf } from './tool.js';
 import { createScheduleOverrides } from './schedule-override.js';
 
@@ -66,10 +66,10 @@ export function apply(ctx, config) {
     name:'tool:schedule-model-natural',
     order:ctx.systemPrompt.getSectionOrder('TOOL_SCHEDULE'),
     text:({scope})=>ctx.tools.get('schedule_create_with_model',scope)
-      ?'To change only the model or thinking level of an existing task, use schedule_update_model if available; preserve its recurrence and all other settings. If that tool is unavailable or the target is not a fresh session per run, report that the change is not supported; never recreate or retarget it. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
+      ?'To change only the model or thinking level of an existing task, use schedule_update_model if available; preserve its recurrence and all other settings. For an explicit request to remove/reset an existing model override and restore the original preset/default, use schedule_clear_model. When showing a task, explain any pending reservation or skipped override, and do not describe a native receipt as model execution. If the relevant tool is unavailable or the target is not a fresh session per run, report that the change is not supported; never recreate or retarget it. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
       :'',
   });
-  ctx.effect(() => registerQuery(ctx, routes, task => overrides?.configured(task)), 'schedule-model.query');
+  ctx.effect(() => registerQuery(ctx, routes, task => overrides?.state(task)), 'schedule-model.query');
 }
 
 function registerNatural(ctx, routes){
@@ -98,7 +98,8 @@ function registerNatural(ctx, routes){
       const resolved=resolveNatural(await ctx.sessionController.modelCatalog(),a.model,a.thinking);
       if(!resolved.selection) return JSON.stringify(resolved);
       const selected=resolved.selection;
-      await ctx.llm.resolveCallConfig(selected,exec.signal);
+      const routeError=await validateNaturalRoute(ctx.llm,selected,exec.signal);
+      if(routeError)return JSON.stringify(routeError);
       exec.signal?.throwIfAborted();
       const create=await sessionCreationOptions(ctx,exec.agent,a.cwd,selected,routes);
       exec.signal?.throwIfAborted();
@@ -113,7 +114,8 @@ function registerNatural(ctx, routes){
         title:a.title.trim(),prompt:a.prompt.trim(),timing,
         target:{kind:'session',sessionId:session.sessionId},
       },exec.agent.session.id,exec.signal);
-      return JSON.stringify({id:task.id,scheduledAt:task.scheduledAt,configured:selected});
+      return JSON.stringify({id:task.id,scheduledAt:task.scheduledAt,configured:selected,
+        target:{kind:'session',sessionId:session.sessionId},sessionReuse:true});
     },
   }));
 }
@@ -149,7 +151,7 @@ async function scheduledWorkingDirectory(agent,explicitCwd){
   }catch{throw new Error('Working directory does not exist or is not a directory. No task was created.');}
 }
 
-export function registerQuery(ctx, routes, overrideFor) {
+export function registerQuery(ctx, routes, overrideStateFor) {
   return ctx.tools.register(defineTool({
     name:'schedule_view_model',
     description:'Inspect the configured model and last recorded DSH model request for a scheduled task in this conversation. Use exact ID or title, never treat configuration as execution.',
@@ -167,13 +169,19 @@ export function registerQuery(ctx, routes, overrideFor) {
       const {task,error}=await resolveOwnedTask(ctx.schedule,identifier.trim(),sessionId);
       if(error) return JSON.stringify(error);
       const preset=task.target.create?.agentPreset??null;
-      let configured=await overrideFor?.(task)??(preset===null?null:routes.get(preset)??null);
+      const override=await overrideStateFor?.(task);
+      let configured=override?.overrideStatus==='unreadable'?null:
+        override?.configured??(preset===null?null:routes.get(preset)??null);
+      let configuredSource=override?.configured?'override':configured?'preset':'native_or_unknown';
       if(!configured&&task.target.kind==='session'){
-        try{configured=await configuredSessionModel(ctx.sessionController,task.target.sessionId,exec.signal);}
+        try{
+          configured=await configuredSessionModel(ctx.sessionController,task.target.sessionId,exec.signal);
+          if(configured)configuredSource='session';
+        }
         catch(error){exec.signal?.throwIfAborted();}
       }
       const delivery=task.lastDelivery;
-      let latestRun={status:'no_recorded_delivery',requested:null,providerReturnedModel:null};
+      let latestRun={status:override?.pending?'pending_delivery':'no_recorded_delivery',requested:null,providerReturnedModel:null};
       if(delivery){
         try{
           latestRun={...await inspectLatest(ctx.sessionController,delivery,exec.signal),
@@ -184,7 +192,9 @@ export function registerQuery(ctx, routes, overrideFor) {
             deliveredAt:delivery.deliveredAt};
         }
       }
-      return JSON.stringify({id:task.id,title:task.title,preset,configured,latestRun});
+      return JSON.stringify({id:task.id,title:task.title,preset,configured,configuredSource,latestRun,
+        overrideStatus:override?.overrideStatus??'unavailable',pending:override?.pending??null,
+        lastSkipped:override?.lastSkipped??null});
     },
   }));
 }

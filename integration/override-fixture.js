@@ -41,7 +41,7 @@ export async function verifyOverrides(ctx,log,restart=false) {
   const q=ctx.tools.get('schedule_view_model');
   assert.ok(edit,'schedule_update_model must be available');
   const create=(title,timing,target,actor=sessionId)=>ctx.schedule.create(
-    {title,prompt:schedulePrompt,timing,target},actor);
+    {title,prompt:title===timedTitle?'Reply with fixture-briefing-override only.':schedulePrompt,timing,target},actor);
   const kind='new',target={kind,create:{cwd,agentPreset:'schedule-beta'}};
   const timing={kind:'rrule',rrule};
   const [before, unaffected, shared]=await Promise.all([
@@ -50,10 +50,20 @@ export async function verifyOverrides(ctx,log,restart=false) {
     create('Refuse a shared destination',{kind:'after',after_seconds:3600},{kind:'session',sessionId}),
   ]);
   const call=identifier=>edit.execute({identifier,model:'alpha',thinking:'high'},exec);
+  const clear=ctx.tools.get('schedule_clear_model');
+  assert.ok(clear);
+  const revert=(identifier,agent=exec.agent)=>clear.execute({identifier},{...exec,agent}).then(JSON.parse);
+  const toClear=await create('Clear a stored override',timing,target);
+  await call(toClear.id);
   assert.equal(JSON.parse(await call(shared.id)).code,'requires_fresh_session_target');
   const foreignSession=(await ctx.sessionController.create({})).sessionId;
   const {agent:foreign}=await ctx.sessionController.resolveAgent(foreignSession);
   assert.equal(JSON.parse(await edit.execute({identifier:before.id,model:'alpha',thinking:'high'},{...exec,agent:foreign})).code,'not_found_in_session');
+  assert.equal((await revert(toClear.id,foreign)).code,'not_found_in_session');
+  assert.equal((await revert(shared.id)).code,'requires_fresh_session_target');
+  assert.equal((await revert(toClear.id)).cleared,true);
+  assert.equal((await revert(toClear.id)).cleared,false);
+  assert.deepEqual(await ctx.schedule.view({id:toClear.id}),toClear);
   await call(before.id);
   const after=await ctx.schedule.view({id:before.id});
   assert.deepEqual(after,before,'existing task record, target, cwd, preset, RRULE, next and history are not edited');
@@ -61,6 +71,14 @@ export async function verifyOverrides(ctx,log,restart=false) {
   assert.deepEqual((await peek(before.id)).configured,{provider:'deepseek-test',model:'alpha',reasoningEffort:'high'});
   assert.deepEqual((await peek(unaffected.id)).configured,{provider:'local-test',model:'beta',reasoningEffort:'low'});
   assert.equal((await peek(shared.id)).configured,null);
+  assert.equal((await peek(before.id)).configuredSource,'override');
+  assert.equal((await peek(toClear.id)).configuredSource,'preset');
+  assert.deepEqual((await peek(toClear.id)).configured,{provider:'local-test',model:'beta',reasoningEffort:'low'});
+  const clearedRun=await ctx.schedule.run({id:toClear.id});
+  assert.ok(clearedRun.lastDelivery);
+  const {agent:clearedRecipient}=await ctx.sessionController.resolveAgent(clearedRun.lastDelivery.targetSessionId);
+  assert.equal(clearedRecipient.model.current().model,'beta');
+  log('override_clear_preserves_task_ok',true);
   const row=await ctx.schedule.run({id:before.id});
   assert.ok(row.lastDelivery);
   const other=await ctx.schedule.run({id:unaffected.id});

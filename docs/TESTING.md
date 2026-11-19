@@ -13,7 +13,7 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 
 可选的慢测（仍使用隔离 profile）：
 
-- `DSH_E2E_UPGRADE_FROM=/absolute/path/old.tgz bash integration/run.sh /path/to/prefix`：旧包先创建原生任务，升级和冷启动后对比任务记录。
+- `DSH_E2E_UPGRADE_FROM=/absolute/path/old.tgz bash integration/run.sh /path/to/prefix`：候选包由当前检出的版本打包，版本号必须和旧包不同；脚本核对实际安装的版本。用 v0.1.4 作旧包，确认原生任务记录在升级和冷启动后不变；用 v0.1.5 作旧包，在升级前为两个原生任务保存模型覆盖，让第一条在 v0.1.5 遇到启动期 briefing 并留下真实的卡住预留，再分别在升级后重试第一条、冷启动后首次投递第二条，验证任务记录、工作目录和预设未被改写，已卡住的任务沿用原预留会话，且两次实际调用模拟服务商时都用了升级前所选的模型和思考等级。要用当前已发布代码自测升级流程，只在临时副本里给候选包设置不同的测试版本号，不改正式版本。
 - `DSH_E2E_LONG_HISTORY=1 bash integration/run.sh /path/to/prefix`：等待真实的每任务手动运行间隔，验证第二次投递、会话隔离、历史及规则。
 - `DSH_E2E_PROBE_REMOVAL=1 bash integration/run.sh /path/to/prefix`：用两个模拟供应商复测已知风险。若卸载后该任务实际使用默认模型，脚本返回 **2（已复现不安全行为）**，不得记成通过。不要对真实 profile 跑。
 
@@ -22,9 +22,10 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 运行 `bash integration/gui.sh /path/to/isolated-dsh-npm-prefix [port]`，从终端打开**仅本机**的启动链接。这个夹具只预建一个三段旧任务及其关联会话；下面的创建、修改、运行和查询必须实际在 GUI 操作。可使用下列中文话术，或夹具提供的英文命令。在侧栏展开 `workspace` 并打开 `GUI QA workspace fixture ready.`：
 
 1. 发送「创建GUI三段任务，每天上海时间 04:30、12:30、18:30，Alpha 低思考」。通过条件：一条新任务、原生自定义规则三段，配置 `alpha/low`。英文：`Create the three-time GUI task`。
-2. 在同一会话发送「把GUI旧任务改成 Alpha 高思考，其他不变」。打开旧任务详情，仍是每次新建会话、原工作区、原 RRULE；点击 **立即执行**，在运行记录进入目标对话，核对预设不变以及模拟模型收到 `alpha/high`。英文：`Change the existing GUI task`。
+2. 在同一会话发送「把GUI旧任务改成 Alpha 高思考，其他不变」。打开旧任务详情，仍是每次新建会话、原工作区、原 RRULE；点击 **立即执行**，在运行记录进入目标对话，核对启动 briefing 未被丢弃、预设不变、模拟模型收到 `alpha/high`。英文：`Change the existing GUI task`。
 3. 回原对话发送「查询GUI旧任务」。配置和最近有记录的请求均为 `alpha/high`，且供应商实际返回模型未被冒充为已知。英文：`Inspect the existing GUI task`。
-4. 取证只记测试版本和脱敏结果，关闭测试 Host。这个夹具按固定话术驱动工具调用，不证明任意自然语言或真实供应商都能正确路由。Windows/Desktop 和从 GUI 安装另做环境验收。
+4. 在原对话发送「撤销GUI旧任务的模型覆盖」，再查询，配置来源恢复到预设，历史仍显示之前的 `alpha/high`，原生任务列表不出现新副本。英文：`Clear the existing GUI task`。
+5. 取证只记测试版本和脱敏结果，关闭测试 Host。这个夹具按固定话术驱动工具调用，不证明任意自然语言或真实供应商都能正确路由。Windows/Desktop 和从 GUI 安装另做环境验收。
 
 ## 回归矩阵
 
@@ -36,7 +37,7 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 | 工作目录与预设 | 无显式目录继承源目录；显式现存目录生效；无效目录不新增任务。已有/未注册工作区、含空格的路径、Windows 路径要分测；确认目标会话的实际 cwd 和 preset，真实 PTC 能用原有工具。 | Host＋GUI／目标 OS |
 | 旧任务改模型 | 仅更改关联对话中 `new` 的模型配置。比对 ID、RRULE、下一次运行、目录、预设、状态和历史；同预设的另一任务、未授权会话、委托子代理不受影响；`session` / `new_once` 拒绝且不迁移。 | 单测＋Host＋GUI |
 | 错误及取消 | 重名、模型/思考档位不明确、供应商缺失、目录错误、写盘与取消。失败不偷偷改全局默认、不执行其他模型、不误报成功；创建失败同时验证没有残留空会话。 | 单测＋故障注入 Host |
-| 投递、持久与隔离 | 手动和原生计时各跑一次；两次运行的 `new` 会话不同，同 profile 重启后仍能用覆盖模型。覆盖记录丢失/损坏、禁用插件、跨 profile、竞争投递分别测；不能把回退到默认当作通过。 | Host＋GUI 运行记录 |
+| 投递、持久与隔离 | 手动和原生计时各跑一次；启动插件排队 briefing 不等同于 turn 已经开始；两次运行的 `new` 会话不同，同 profile 重启后仍能用覆盖模型。覆盖记录丢失/损坏、禁用插件、跨 profile、竞争投递分别测；不能把回退到默认当作通过。 | Host＋GUI 运行记录 |
 | GUI 原生操作 | 同一候选在对话里建任务/改模型/查模型；原生任务页检查规则、目录、执行位置，手动运行并打开运行对话核对实际请求。对暂停、恢复、取消编辑、重复触发与删除使用独立假任务。 | 真实 GUI，不以 API 日志代替 |
 | 历史查询 | 区分已配置模型、已记录请求、无回执、仅尝试、历史不可读或落在扫描窗口外。字段不泄露原始请求、密钥或提示词。 | 单测＋Host |
 

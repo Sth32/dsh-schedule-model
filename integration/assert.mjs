@@ -12,7 +12,7 @@ assert.ok(by('request').every(x=>['local-test','deepseek-test'].includes(x.provi
 assert.deepEqual(by('run').map(([title,delivered])=>[title,delivered]).sort(),
   [['alpha',true],['beta',true],['legacy',true],['multi',true]]);
 assert.match(by('run-error').find(([t])=>t==='broken')[1],/no adapter registered/);
-assert.deepEqual(by('restart').flat().filter(([title])=>!['Existing PTC-like recurring override','Other task, same preset','Native timer override','Refuse a shared destination'].includes(title)).sort(),[
+assert.deepEqual(by('restart').flat().filter(([title])=>!['Existing PTC-like recurring override','Other task, same preset','Native timer override','Refuse a shared destination','Clear a stored override'].includes(title)).sort(),[
   ['alpha',null,true],['beta','schedule-beta',true],
   ['broken','schedule-broken',false],['legacy',null,true],
   ['legacy-explicit','schedule-beta',false],['legacy-inherited','schedule-beta',true],['multi',null,true]
@@ -40,12 +40,39 @@ console.log('PASS: clean install, natural chat, native schedule, cwd/preset deli
 
 assert.deepEqual(by('override_manual_timer_cwd_preset_ok'), [true]);
 assert.deepEqual(by('override_restart_ok'), [true]);
+assert.deepEqual(by('override_clear_preserves_task_ok'), [true]);
+assert.ok(by('startup_briefing').some(({count})=>count>0));
+assert.deepEqual(by('startup_briefing_request'), [
+  {provider:'deepseek-test',model:'alpha',reasoningEffort:'high'},
+]);
+console.log('PASS: native timer received startup next-step briefing and dispatched with the different requested route');
 
 if(process.env.DSH_E2E_UPGRADE_FROM){
  assert.equal(by('upgrade_seed').length,1);
- assert.deepEqual(by('upgrade_retained'),by('upgrade_seed'));
- assert.deepEqual(by('upgrade_restart'),by('upgrade_seed'));
- console.log('PASS: actual local plugin upgrade retains the same native task through restart');
+ const seed=by('upgrade_seed')[0];
+ if(seed.mode==='native-only'){
+   assert.deepEqual(by('upgrade_retained'),seed.rows);
+   assert.deepEqual(by('upgrade_restart'),seed.rows);
+   assert.deepEqual(by('upgrade_delivered'),[]);
+   assert.deepEqual(by('upgrade_mock_request'),[]);
+   console.log('PASS: native-only seed task unchanged after upgrade and cold restart');
+ }else{
+   assert.equal(seed.mode,'existing-override');
+   assert.equal(seed.rows.length,2);
+   assert.deepEqual(by('upgrade_retained'),[seed.rows[0]]);
+   assert.deepEqual(by('upgrade_restart'),[seed.rows[1]]);
+   const routed={provider:'deepseek-test',model:'alpha',reasoningEffort:'low'};
+   const deliveries=by('upgrade_delivered');
+   assert.deepEqual(deliveries.map(({stage,taskId,observed})=>[stage,taskId,observed]),
+    [['upgrade',seed.rows[0].id,routed],['restart',seed.rows[1].id,routed]]);
+   assert.notEqual(deliveries[0].recipient,deliveries[1].recipient);
+   if(seed.alreadyReserved){
+     assert.equal(deliveries[0].recipient,seed.alreadyReserved);
+     console.log('PASS: upgrade recovered a genuinely wedged v0.1.5 reservation without recreating the task or the session');
+   }
+   assert.deepEqual(by('upgrade_mock_request'),['upgrade','restart'].map(stage=>({stage,...routed})));
+   console.log('PASS: existing overrides retained across upgrade and cold restart; two actual mock-provider requests match');
+ }
 }
 if(process.env.DSH_E2E_LONG_HISTORY==='1'){
  assert.deepEqual(by('native_repeat_history_ok'),[true]);

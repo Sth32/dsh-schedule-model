@@ -1,10 +1,12 @@
+import { verifyUpgrade, seedUpgrade, upgradePrefix } from './upgrade-fixture.js';
+import {installStartupBriefing,marker} from './startup-briefing.js';
 import {verifyOverrides} from './override-fixture.js';
 const { LlmAdapter } = await import(process.env.DSH_E2E_LLM_MODULE);
 import {appendFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 export const name='schedule-model-e2e';
-export const inject=['schedule','llm','sessionController','tools','agentPresets','workspaceRegistry'];
+export const inject=['schedule','llm','sessionController','tools','agentPresets','workspaceRegistry','storageDomain'];
 const log=(event,value)=>appendFileSync(process.env.DSH_E2E_LOG,JSON.stringify({event,value})+'\n');
 class Local extends LlmAdapter {
   async listModels(provider){return (provider==='deepseek-test'?['alpha']:['beta','legacy']).map(id=>({provider,id,name:id}));}
@@ -13,8 +15,14 @@ class Local extends LlmAdapter {
     return {provider,id,name:id,context:{contextWindow:32000},reasoning:{efforts:['high','low'].map(id=>({id,name:id}))}};
   }
   async *stream(options) {
-    log('request',{provider:options.provider,model:options.model,effort:options.reasoningEffort,purpose:options.purpose});
     const text=options.messages.flatMap(m=>m.role==='user'&&Array.isArray(m.content)?m.content.map(x=>x.text??''):[]).join(' ');
+    if(text.includes(marker)&&text.includes('fixture-briefing-override'))
+      log('startup_briefing_request',{provider:options.provider,model:options.model,reasoningEffort:options.reasoningEffort});
+    log('request',{provider:options.provider,model:options.model,effort:options.reasoningEffort,purpose:options.purpose});
+    for(const stage of ['upgrade','restart']){
+      if(text.includes('fixture-upgrade-probe-'+stage))
+        log('upgrade_mock_request',{stage,provider:options.provider,model:options.model,reasoningEffort:options.reasoningEffort});
+    }
     if(text.includes('用ds+思考低的模型')&&!options.messages.some(m=>m.role==='tool')){
       if(!options.tools?.some(t=>t.name==='schedule_create_with_model')) throw new Error('Tool not advertised');
       const id='test_tool_'+randomUUID();
@@ -34,6 +42,7 @@ class Local extends LlmAdapter {
   }
 }
 export function apply(ctx) {
+  installStartupBriefing(ctx,log);
   ctx.effect(()=>ctx.llm.registerAdapter(['local-test','deepseek-test'],new Local()), 'fixture-adapter');
   const timer=setTimeout(async()=>{
     try {
@@ -59,19 +68,14 @@ export function apply(ctx) {
         return;
       }
       if(process.env.DSH_E2E_UPGRADE_SEED==='1'){
-        if(ctx.tools.get('schedule_update_model'))throw new Error('Old upgrade seed already has the 0.1.5 tool');
-        const row=await ctx.schedule.create({title:'Upgrade-retained task',prompt:'Fixture state retained',
-          timing:{kind:'every',every_seconds:3600},target:{kind:'new',create:{agentPreset:'schedule-beta'}}});
-        log('upgrade_seed',row);
+        await seedUpgrade(ctx,log);
         return;
       }
-      if(process.env.DSH_E2E_UPGRADE_FROM){
-        const row=(await ctx.schedule.list()).items.find(x=>x.title==='Upgrade-retained task');
-        log(process.env.DSH_E2E_RESTART==='1'?'upgrade_restart':'upgrade_retained',row);
-      }
+      if(process.env.DSH_E2E_UPGRADE_FROM)
+        await verifyUpgrade(ctx,log,process.env.DSH_E2E_RESTART==='1');
       if (process.env.DSH_E2E_RESTART === '1') {
         const rows = (await ctx.schedule.list()).items;
-        log('restart',rows.filter(e=>e.title!=='Upgrade-retained task').map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
+        log('restart',rows.filter(e=>!e.title.startsWith(upgradePrefix)).map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
         const multi=rows.find(row=>row.title==='multi');
         const {agent:multiAgent}=await ctx.sessionController.resolveAgent(multi.target.sessionId);
         log('multi_restart',{preset:multiAgent.session.header.agentPreset,

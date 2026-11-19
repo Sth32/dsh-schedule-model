@@ -12,6 +12,13 @@
 | 投递与重启 | Host 预留会话、投递并保存回执；共享会话的多条到期任务可以一起投递。 | 只在已有覆盖配置且匹配 Host 预留会话时，借助 `schedule/resolve-agent` 选择并持久化模型，再让 Host 投递。覆盖配置按任务 ID 存在插件自己的 profile 目录，**不在原生任务里**；停用或卸载插件后不要假定原有覆盖依然生效。Profile 搬迁和回退要考虑原生任务、会话数据与覆盖文件三者。 |
 | 查询与作用域 | 回执指向投递消息；模型请求日志记录请求配置。 | 查询区分配置、历史中的实际 DSH 请求和供应商最终选用的模型。没有证据时返回未核验，不用配置值冒充实跑。查询、更改只限关联会话，子代理拒绝；原生工具的系统范围不因本插件扩大。 |
 
+### v0.1.6：启动期 briefing 兼容与失败恢复
+
+- 保留原生预留逻辑与 `schedule/resolve-agent`。rc.5 新会话的首次激活会直接走创建路径；插件在 native activation 完成后、调度提示词入队前核对 turn 边界与持久化。如果只有启动插件排入的 `next-step` briefing，它不是已开始的 turn。仍保留 `next-turn`、活跃状态和已打开/完成 turn 的保护，不篡改已有会话路线。
+- 若真正开始的会话已有不同路线，保留当前模型完成该次投递，查询显示 `lastSkipped.status=kept_existing_route`。配置损坏、模型不可用、选择或持久化失败则不向其他服务商发送任务内容；原生投递仍待处理，查询报告 `blocked_before_delivery`。修正配置或在原对话明确撤销覆盖，再重试。没有上一笔回执时 `latestRun.status=pending_delivery`；若有上一笔，保留历史请求，并单列本次 `pending`。
+- `schedule_clear_model` 只清理这个任务自己的覆盖，恢复随后投递的原预设或默认，不更改已跑历史。覆盖仍按 profile 保存，Windows 的 POSIX mode 不等于访问控制；请由 profile 所在目录的 ACL 保护。暂不自动回收任务删除后的孤儿文件，直到跨 profile 的原生视图和文件所有权都验证清楚。
+- `providerReturnedModel:null` 表示 DSH 没有给插件可验证的上游返回模型。不会扫描外部网关的日志或据此猜测。任务查询里 `configuredSource` 的取值是 `override`、`preset`、`session` 和 `native_or_unknown`。
+
 ### 最脆弱的接口
 
 - `schedule/resolve-agent` 是活跃会话恢复钩子，入参**只有会话 ID**。本插件从 `storageDomain.get('schedule').table('tasks')` **只读**诊断视图核对 `pendingDelivery.targetSessionId`。表结构、预留写入时序、钩子顺序不是独立的稳定插件 API。升级前逐项重验。不要用标题、提示词、最近运行会话猜映射；不要写原生表、篡改原生任务或降级默认模型来掩盖不匹配。

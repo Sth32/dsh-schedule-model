@@ -22,6 +22,7 @@ fixture="$profile/node_modules/local-dsh-schedule-e2e"
 mkdir -p "$fixture"
 printf '%s\n' '{"name":"local-dsh-schedule-e2e","type":"module","exports":"./index.js"}' > "$fixture/package.json"
 cp "$root/integration/gui-fixture.js" "$fixture/index.js"
+cp "$root/integration/startup-briefing.js" "$fixture/startup-briefing.js"
 cp "$root/integration/fixture.yml" "$profile/cordis.patch.yml"
 printf '\nOpen the local launch URL below in a test browser. Do not copy its credential to any report.\n'
 printf 'Temporary mock request evidence: %s\n' "$DSH_E2E_LOG"

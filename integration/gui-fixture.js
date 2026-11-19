@@ -1,4 +1,5 @@
 import {appendFileSync,mkdirSync} from 'node:fs';
+import {installStartupBriefing,marker} from './startup-briefing.js';
 import {randomUUID} from 'node:crypto';
 const {LlmAdapter}=await import(process.env.DSH_E2E_LLM_MODULE);
 export const name='local-dsh-schedule-gui';
@@ -14,6 +15,7 @@ class Local extends LlmAdapter {
     const commands=[
       [/创建GUI三段任务|Create the three-time GUI task/i,'schedule_create_with_model',{title:'GUI三段任务',prompt,model:'alpha',thinking:'低',dailyTimes:['04:30','12:30','18:30'],timeZone:'Asia/Shanghai'}],
       [/把GUI旧任务改成|Change the existing GUI task/i,'schedule_update_model',{identifier:'GUI旧任务',model:'alpha',thinking:'高'}],
+      [/撤销GUI旧任务|Clear the existing GUI task/i,'schedule_clear_model',{identifier:'GUI旧任务'}],
       [/查询GUI旧任务|Inspect the existing GUI task/i,'schedule_view_model',{identifier:'GUI旧任务'}],
     ];
     const textOf=m=>m?.content?.map?.(x=>x.text??'').join(' ')??'';
@@ -21,7 +23,7 @@ class Local extends LlmAdapter {
     const text=index<0?options.messages.filter(m=>m.role==='user').map(textOf).join(' '):textOf(options.messages[index]);
     const command=index<0?undefined:commands.find(([pattern])=>pattern.test(text));
     const last=index<0?undefined:options.messages.slice(index+1).findLast(m=>m.role==='tool');
-    log('request',{text:text.slice(0,360),model:options.model,effort:options.reasoningEffort});
+    log('request',{text:text.slice(0,360),model:options.model,effort:options.reasoningEffort,briefing:options.messages.some(m=>textOf(m).includes(marker))});
     if(command&&!last){
       const [,name,args]=command;
       if(!options.tools?.some(t=>t.name===name))throw Error('Tool was not advertised: '+name);
@@ -42,6 +44,7 @@ class Local extends LlmAdapter {
   }
 }
 export function apply(ctx){
+  installStartupBriefing(ctx,log);
   ctx.effect(()=>ctx.llm.registerAdapter(['local-test','deepseek-test'],new Local()));
   const t=setTimeout(async()=>{
     try{
