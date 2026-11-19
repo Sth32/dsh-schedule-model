@@ -52,6 +52,6 @@ dsh plugin --profile web add https://github.com/Sth32/dsh-schedule-model.git
 
 方案不可用会说明原因，不自动换成另一方案。未选择、取消或拒绝审批都不修改。
 
-兼容声明：DSH 0.2.2 系列（rc.1 起）。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包](dist/dsh-schedule-model-0.1.8.tgz)
+兼容声明：DSH 0.2.2 系列（rc.1 起）。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包（最新发布，见 Assets）](https://github.com/Sth32/dsh-schedule-model/releases/latest)
 
 维护者：[维护指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/MAINTENANCE.md) · [测试指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/TESTING.md)。
