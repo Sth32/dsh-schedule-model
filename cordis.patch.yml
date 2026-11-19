@@ -1,0 +1,3 @@
+- insert:
+    - id: schedule-model-natural
+      name: dsh-schedule-model/creator

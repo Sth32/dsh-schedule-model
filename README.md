@@ -1,2 +1,13 @@
-# dsh-schedule-model
-Pin a model and reasoning effort for each DeepSeek Harness scheduled task.
+## 1. 给 Schedule 加了什么
+
+每个定时任务可指定模型和思考等级。任务仍出现在 DSH 原生定时任务列表，配置保存在独立会话里，不改你的全局默认模型或已有任务。模型简称有歧义或模型不支持所选档位时，先问清楚，不会偷偷换模型。
+
+## 2. 怎么通过自然语言使用
+
+下载 [v0.1.3 插件包](dist/dsh-schedule-model-0.1.3.tgz)。DSH 0.2.2-rc.1 Web 版可通过 `dsh plugin --profile web add /path/to/dsh-schedule-model-0.1.3.tgz` 安装，重启后直接在对话里说：
+
+> 用 ds，思考调低，每小时跑一次「进度检查」，检查当前项目的待办并汇报变化。
+
+> 查「进度检查」配置的模型和思考等级，以及最近一次实际发出的模型请求。
+
+不需要写 YAML、预设 ID 或 RRULE。查询显示 DSH 有记录的请求配置；服务商实际响应的模型无法核实时会标为未知。在任务独立会话里手动换模型会改变任务后续运行的模型。

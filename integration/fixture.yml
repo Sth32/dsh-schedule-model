@@ -1,0 +1,23 @@
+- id: agent-default-model
+  config:
+    provider: local-test
+    model: legacy
+- id: session-title-llm
+  disabled: true
+- insert:
+    - id: schedule-alpha
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: schedule-alpha, plugins: []}
+    - id: schedule-beta
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: schedule-beta, plugins: []}
+    - id: schedule-broken
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: schedule-broken, plugins: []}
+    - id: integration-fixture
+      name: local-dsh-schedule-e2e
+- id: schedule-model-natural
+  config:
+    routes:
+      - {preset: schedule-beta, provider: local-test, model: beta, reasoningEffort: low}
+      - {preset: schedule-broken, provider: missing-provider, model: missing}
