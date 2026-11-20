@@ -2,6 +2,7 @@
   "name": "dsh-schedule-model",
   "version": "0.1.9",
   "type": "module",
+  "license": "MIT",
   "exports": {
     ".": "./index.js",
     "./creator": "./creator.js"
@@ -10,6 +11,7 @@
     "dsh": ">=0.2.2-rc.1 <=0.2.2"
   },
   "files": [
+    "LICENSE",
     "index.js",
     "cordis.patch.yml",
     "schedule-management.patch.yml",
