@@ -1,6 +1,16 @@
-# DSH Schedule Model
+<p align="center"><img src="docs/assets/schedule-model.svg" alt="DSH Schedule Model：时钟与模型设置" width="64" height="64"></p>
 
-**给定时任务单独选模型和思考等级，直接在 DSH 对话里说。** 不必为了一个任务改全局默认模型，也不用手写预设或 RRULE。
+<h1 align="center">DSH Schedule Model</h1>
+
+<p align="center"><strong>在 DSH 对话里给定时任务选模型和思考等级，不改全局默认。</strong></p>
+
+<p align="center"><a href="https://github.com/Sth32/dsh-schedule-model/releases/latest">安装包与发布说明</a> · <a href="package.json">DSH 兼容范围</a> · <a href="LICENSE">MIT</a></p>
+
+> 每天上海时间 04:30、12:30、18:30 跑「进度检查」，用已配置的 BigFree，高思考。
+
+![DSH 原生任务详情：一条定时任务包含三个时刻，并绑定同名接收会话](docs/assets/schedule-task.png)
+
+<sub>DSH Web 实机：一条原生任务显示三个时刻和接收会话。演示使用模拟模型。v0.1.11 在 Web 0.2.2-rc.5 和 0.2.3-alpha.2 验证，GUI 截图来自后者。</sub>
 
 ## 1. 给 Schedule 加了什么
 
@@ -19,9 +29,7 @@ DSH Web（CLI）：
 dsh plugin --profile web add https://github.com/Sth32/dsh-schedule-model.git
 ```
 
-重启 DSH，选中工作区后在对话里试：
-
-> 每天上海时间 04:30、12:30、18:30 跑「进度检查」，用已配置的 BigFree，高思考。
+重启 DSH，选中工作区后，用开头的话术试建一条任务。
 
 新建任务的专用会话默认沿用任务名并固定标题。要单独命名，可以加一句「接收会话叫『巡检派单』」。已建会话不自动改名。
 
@@ -33,7 +41,10 @@ dsh plugin --profile web add https://github.com/Sth32/dsh-schedule-model.git
 
 修改和撤销适用于**原本每次新开会话的旧任务**。自然语言新建时使用专用会话，同一任务每次复用它；删除任务不会自动删除会话。首次验证：在「自动化任务」里找到对应任务，点「立即执行」，再回原对话查询模型。查询的是 DSH 记录的请求，不代表供应商最终实际使用的模型。
 
-**跨工作区管理**：在当前 DSH profile 的 `cordis.patch.yml` 中为插件加一次配置，重启后新开会话，选择「定时任务管理 / Schedule Management」。如果已有这一行的 `config`，只添加字段，保留原来的 `routes`。
+<details>
+<summary>进阶：跨工作区管理和复用会话</summary>
+
+在当前 DSH profile 的 `cordis.patch.yml` 中为插件加一次配置，重启后新开会话，选择「定时任务管理 / Schedule Management」。如果已有这一行的 `config`，只添加字段，保留原来的 `routes`。
 
 ```yaml
 - id: schedule-model-natural
@@ -54,8 +65,8 @@ dsh plugin --profile web add https://github.com/Sth32/dsh-schedule-model.git
 
 方案不可用会说明原因，不自动换成另一方案。未选择、取消或拒绝审批都不修改。
 
-兼容声明：安装范围为 DSH 0.2.x（从 0.2.2-rc.1 起，不含 0.3.0 预发布）。范围内的小版本不会只因版本号被拒绝，但安装允许不等于逐版实测。历次验收覆盖 Linux Web；本版具体覆盖见发布说明。Windows 桌面版未独立验收。[本地安装包（最新发布，见 Assets）](https://github.com/Sth32/dsh-schedule-model/releases/latest)
+</details>
 
-维护者：[维护指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/MAINTENANCE.md) · [测试指南](https://github.com/Sth32/dsh-schedule-model/blob/main/docs/TESTING.md)。
+安装范围：DSH 0.2.x，自 0.2.2-rc.1 起，不含 0.3.0 预发布。允许安装不等于逐版实测。
 
-许可证：[MIT](LICENSE)。
+[维护指南](docs/MAINTENANCE.md) · [测试指南](docs/TESTING.md)
