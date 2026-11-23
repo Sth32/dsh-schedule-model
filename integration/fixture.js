@@ -78,6 +78,8 @@ export function apply(ctx) {
         log('restart',rows.filter(e=>!e.title.startsWith(upgradePrefix)).map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
         const multi=rows.find(row=>row.title==='multi');
         const {agent:multiAgent}=await ctx.sessionController.resolveAgent(multi.target.sessionId);
+        const pinned=ctx.get('sessionTitle').get(multiAgent.session);
+        log('multi_title_restart',[pinned?.title,pinned?.source?.kind]);
         log('multi_restart',{preset:multiAgent.session.header.agentPreset,
           current:multiAgent.model.current(),cwd:multiAgent.session.header.cwd.endsWith('test-schedule-workspace')});
         const alpha=rows.find(row=>row.title==='alpha');
@@ -123,7 +125,7 @@ export function apply(ctx) {
       const workspace=await ctx.workspaceRegistry.create(cwd);
       const presetSource=await ctx.sessionController.create({agentPreset:'schedule-alpha'});
       const {agent:presetAgent}=await ctx.sessionController.resolveAgent(presetSource.sessionId);
-      const multiInput={title:'multi',prompt:'Reply with fixture-ok only.',model:'ds',thinking:'低',
+      const multiInput={title:'multi',sessionTitle:'Dedicated dispatch',prompt:'Reply with fixture-ok only.',model:'ds',thinking:'低',
         dailyTimes:['08:00','17:30'],timeZone:'Asia/Singapore',cwd};
       const countBefore=(await ctx.schedule.list()).total;
       try{
@@ -134,6 +136,8 @@ export function apply(ctx) {
       const multi=JSON.parse(await creator.execute(multiInput,{agent:presetAgent,signal}));
       const task=await ctx.schedule.view({id:multi.id});
       const {agent:dedicated}=await ctx.sessionController.resolveAgent(task.target.sessionId);
+      const pinned=ctx.get('sessionTitle').get(dedicated.session);
+      log('multi_title_before_delivery',[pinned?.title,pinned?.source?.kind]);
       log('multi_location',{
         correctCwd:dedicated.session.header.cwd===realpathSync(cwd),
         sameWorkspace:workspace.sessionIds.includes(task.target.sessionId),

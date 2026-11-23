@@ -30,6 +30,8 @@ assert.deepEqual(by('query_restart')[0].latestRun.requested,{provider:'deepseek-
 
 assert.deepEqual(by('invalid_cwd_unchanged'),[true]);
 assert.deepEqual(by('multi_location'),[{correctCwd:true,sameWorkspace:true,preset:'schedule-alpha'}]);
+assert.deepEqual(by('multi_title_before_delivery'),[['Dedicated dispatch','user']]);
+assert.deepEqual(by('multi_title_restart'),[['Dedicated dispatch','user']]);
 assert.match(by('multi_rrule')[0], /BYSETPOS=1,4/);
 assert.deepEqual(by('multi_restart'),[{preset:'schedule-alpha',
  current:{provider:'deepseek-test',model:'alpha',reasoningEffort:'low'},cwd:true}]);

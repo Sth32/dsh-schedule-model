@@ -92,7 +92,8 @@ function registerNatural(ctx, routes){
     name:'schedule_create_with_model',
     description:'Create a native DSH scheduled task with the requested model name/alias and requested thinking level. The model is selected only for a fresh task conversation. Prefer this when the user specifies a model or thinking level. Once, interval, and daily schedules are supported.',
     parameters:{
-      title:str('User-facing title'),
+      title:str('User-facing task title; also the default title of the dedicated session'),
+      sessionTitle:{type:'string',description:'Optional pinned title of the dedicated session. Only pass when the user requests a different session title.'},
       prompt:str('What the scheduled task should do'),
       model:str('Exact model ID/display name or user alias, e.g. ds. Never substitute an unspecified model.'),
       thinking:{type:'string',description:'Level requested by user, such as 低/low. Omit when user did not specify.'},
@@ -108,8 +109,16 @@ function registerNatural(ctx, routes){
       if(!exec.agent||delegationDepthOf(exec.agent)>0)
         throw new Error('A root session must request this scheduled task.');
       const timing=naturalTiming(a);
-      if(!a.title.trim()||a.title.trim().length>120||!a.prompt.trim())
+      const title=a.title.trim();
+      if(!title||title.length>120||!a.prompt.trim())
         throw new Error('Title and instructions are required. Title max length: 120.');
+      const sessionTitle=a.sessionTitle?.trim()??title;
+      if(a.sessionTitle!==undefined&&(!sessionTitle||sessionTitle.length>120))
+        throw new Error('Session title must be nonempty and at most 120 characters.');
+      // Custom hosts without the native title service still support existing callers.
+      const titles=ctx.get('sessionTitle');
+      if(a.sessionTitle!==undefined&&!titles)
+        throw new Error('This DSH profile cannot set an explicit session title.');
       const resolved=resolveNatural(await ctx.sessionController.modelCatalog(),a.model,a.thinking);
       if(!resolved.selection) return JSON.stringify(resolved);
       const selected=resolved.selection;
@@ -120,13 +129,15 @@ function registerNatural(ctx, routes){
       exec.signal?.throwIfAborted();
       const session=await ctx.sessionController.create(create);
       const {agent}=await ctx.sessionController.resolveAgent(session.sessionId);
+      exec.signal?.throwIfAborted();
       // Do not call sessionController.selectModel: it also saves the global default.
       agent.model.select(selected);
+      titles?.rename(agent.session,sessionTitle);
       if(!await ctx.sessions.flush(agent.session))
-        throw new Error('Dedicated session model selection could not be persisted; no task created.');
+        throw new Error('Dedicated session model selection or title could not be persisted; no task created.');
       exec.signal?.throwIfAborted();
       const task=await ctx.schedule.create({
-        title:a.title.trim(),prompt:a.prompt.trim(),timing,
+        title,prompt:a.prompt.trim(),timing,
         target:{kind:'session',sessionId:session.sessionId},
       },exec.agent.session.id,exec.signal);
       return JSON.stringify({id:task.id,scheduledAt:task.scheduledAt,configured:selected,
