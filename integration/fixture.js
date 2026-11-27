@@ -2,7 +2,7 @@ import { verifyUpgrade, seedUpgrade, upgradePrefix } from './upgrade-fixture.js'
 import {installStartupBriefing,marker} from './startup-briefing.js';
 import {verifyOverrides} from './override-fixture.js';
 const { LlmAdapter } = await import(process.env.DSH_E2E_LLM_MODULE);
-import {appendFileSync,mkdirSync,realpathSync} from 'node:fs';
+import {appendFileSync,mkdirSync,realpathSync,writeFileSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 export const name='schedule-model-e2e';
@@ -18,6 +18,8 @@ class Local extends LlmAdapter {
     const text=options.messages.flatMap(m=>m.role==='user'&&Array.isArray(m.content)?m.content.map(x=>x.text??''):[]).join(' ');
     if(text.includes(marker)&&text.includes('fixture-briefing-override'))
       log('startup_briefing_request',{provider:options.provider,model:options.model,reasoningEffort:options.reasoningEffort});
+    if(text.includes('fixture-must-not-fallback')||text.includes('fixture-fresh-mode'))
+      log('fresh_mock_request',{text,provider:options.provider,model:options.model,effort:options.reasoningEffort});
     log('request',{provider:options.provider,model:options.model,effort:options.reasoningEffort,purpose:options.purpose});
     for(const stage of ['upgrade','restart']){
       if(text.includes('fixture-upgrade-probe-'+stage))
@@ -75,7 +77,13 @@ export function apply(ctx) {
         await verifyUpgrade(ctx,log,process.env.DSH_E2E_RESTART==='1');
       if (process.env.DSH_E2E_RESTART === '1') {
         const rows = (await ctx.schedule.list()).items;
-        log('restart',rows.filter(e=>!e.title.startsWith(upgradePrefix)).map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
+        const fresh=rows.find(row=>row.title==='Fresh task mode');
+        if(fresh){
+          const {agent}=await ctx.sessionController.resolveAgent(fresh.involvedSessionIds[0]);
+          const result=JSON.parse(await ctx.tools.get('schedule_view_model').execute({identifier:fresh.id},{agent,signal:new AbortController().signal}));
+          log('fresh_restart',{status:fresh.status,configured:result.configured,receipt:!!fresh.lastDelivery,observed:result.latestRun});
+        }
+        log('restart',rows.filter(e=>!e.title.startsWith(upgradePrefix)&&e.title!=='Fresh task mode').map(e=>[e.title,e.target.create?.agentPreset,!!e.lastDelivery]));
         const multi=rows.find(row=>row.title==='multi');
         const {agent:multiAgent}=await ctx.sessionController.resolveAgent(multi.target.sessionId);
         const pinned=ctx.get('sessionTitle').get(multiAgent.session);
@@ -125,6 +133,53 @@ export function apply(ctx) {
       const workspace=await ctx.workspaceRegistry.create(cwd);
       const presetSource=await ctx.sessionController.create({agentPreset:'schedule-alpha'});
       const {agent:presetAgent}=await ctx.sessionController.resolveAgent(presetSource.sessionId);
+      const blockedPrompt='fixture-must-not-fallback';
+      const nativeStaging=await ctx.schedule.create({title:'Guard staging test',prompt:blockedPrompt,
+        timing:{kind:'every',every_seconds:3600},target:{kind:'new',create:{cwd,
+          agentPreset:'dsh-schedule-model/setup/fixture-missing'}}},presetSource.sessionId);
+      try {
+        await ctx.schedule.run({id:nativeStaging.id});
+        throw Error('Staging guard did not block native Run now');
+      }catch(error){
+        if(!/Unknown agent preset/.test(error.message))throw error;
+        log('fresh_native_staging_blocked',true);
+      }
+      await ctx.schedule.edit({id:nativeStaging.id,action:'delete'},presetSource.sessionId);
+      const beforeFailed=(await ctx.schedule.list()).total;
+      const failurePath=join(process.env.DSH_HOME,'profiles','web','schedule-model-overrides');
+      writeFileSync(failurePath,'force model store failure',{flag:'wx'});
+      try{
+        await creator.execute({title:'Must not arm',prompt:blockedPrompt,model:'ds',thinking:'低',intervalMinutes:60,
+          sessionMode:'fresh_each_run',cwd},{agent:presetAgent,signal});
+        throw Error('Storage failure unexpectedly allowed');
+      }catch(error){
+        if(!/EEXIST/.test(error.message))throw error;
+      }finally{unlinkSync(failurePath);}
+      log('fresh_failed_creation_cleaned',beforeFailed===(await ctx.schedule.list()).total);
+      const linkedBefore=workspace.sessionIds.length;
+      const fresh=JSON.parse(await creator.execute({title:'Fresh task mode',sessionTitle:'Pinned fresh title',
+        prompt:'fixture-fresh-mode',model:'ds',thinking:'低',sessionMode:'fresh_each_run',
+        dailyTimes:['04:30','12:30','18:30'],timeZone:'Asia/Singapore',cwd},{agent:presetAgent,signal}));
+      const freshRow=await ctx.schedule.view({id:fresh.id});
+      log('fresh_created',{newTarget:freshRow.target.kind==='new',noSession:workspace.sessionIds.length===linkedBefore,
+        unchangedPreset:freshRow.target.create.agentPreset==='schedule-alpha',cwd:freshRow.target.create.cwd===realpathSync(cwd),
+        recurrence:/BYHOUR=4,12,18/.test(freshRow.rrule)});
+      const runFresh=async()=>{
+        const result=await ctx.schedule.run({id:fresh.id});
+        const runId=result.lastDelivery?.targetSessionId;
+        if(!runId)throw Error('Fresh delivery did not produce a receipt');
+        const {agent:run}=await ctx.sessionController.resolveAgent(runId);
+        const pinned=ctx.get('sessionTitle').get(run.session);
+        log('fresh_run',{id:runId,title:pinned?.title,linked:workspace.sessionIds.includes(runId),route:run.model.current()});
+        for(let i=0;i<60&&run.status!=='idle';i++)await new Promise(r=>setTimeout(r,50));
+        return runId;
+      };
+      const first=await runFresh();
+      await ctx.workspaceRegistry.archiveSession(first,{stopActivity:true});
+      log('fresh_archive_kept_active',(await ctx.schedule.view({id:fresh.id})).status==='active');
+      if(process.env.DSH_E2E_FRESH_LONG==='1'){
+        setTimeout(()=>runFresh().then(second=>log('fresh_distinct',second!==first)).catch(error=>log('error',error.stack)),61_000);
+      }
       const multiInput={title:'multi',sessionTitle:'Dedicated dispatch',prompt:'Reply with fixture-ok only.',model:'ds',thinking:'低',
         dailyTimes:['08:00','17:30'],timeZone:'Asia/Singapore',cwd};
       const countBefore=(await ctx.schedule.list()).total;

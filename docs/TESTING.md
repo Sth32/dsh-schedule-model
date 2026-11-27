@@ -17,6 +17,11 @@ bash integration/run.sh /path/to/isolated-dsh-npm-prefix
 - `DSH_E2E_LONG_HISTORY=1 bash integration/run.sh /path/to/prefix`：等待真实的每任务手动运行间隔，验证第二次投递、会话隔离、历史及规则。
 - `DSH_E2E_PROBE_REMOVAL=1 bash integration/run.sh /path/to/prefix`：用两个模拟供应商复测已知风险。若卸载后该任务实际使用默认模型，脚本返回 **2（已复现不安全行为）**，不得记成通过。不要对真实 profile 跑。
 
+## 每次新开会话验收
+
+- 在上述 Web Host 测试加 `DSH_E2E_FRESH_LONG=1`：等满原生 60 秒再投第二次，确认任务 ID 不变、两个接收会话 ID 不同；第一条运行归档后仍有效、每次模拟请求均命中指定模型和思考档。夹具还会制造真实文件写入失败、直接点击等价的原生「立即执行」接口验证无效预设不能投递，并重启检查模型配置和历史。
+- GUI 发送 `Create the fresh GUI task`；原生任务页应显示每次新开会话和首次运行待创建。点「立即执行」，从运行记录进到新会话，核对模拟模型返回；回到发起会话发送 `Inspect the fresh GUI task` 确认配置与最近请求。仍应能用原话术创建复用会话。
+
 ## 可复现的 GUI 验收
 
 运行 `bash integration/gui.sh /path/to/isolated-dsh-npm-prefix [port]`，从终端打开**仅本机**的启动链接。这个夹具只预建一个三段旧任务及其关联会话；下面的创建、修改、运行和查询必须实际在 GUI 操作。可使用下列中文话术，或夹具提供的英文命令。在侧栏展开 `workspace` 并打开 `GUI QA workspace fixture ready.`：

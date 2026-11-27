@@ -38,7 +38,7 @@ cp "$root/integration/startup-briefing.js" "$profile/node_modules/local-dsh-sche
 cp "$root/integration/override-fixture.js" "$profile/node_modules/local-dsh-schedule-e2e/override-fixture.js"
 cp "$root/integration/upgrade-fixture.js" "$profile/node_modules/local-dsh-schedule-e2e/upgrade-fixture.js"
 cp "$root/integration/fixture.yml" "$profile/cordis.patch.yml"
-if [[ ${DSH_E2E_LONG_HISTORY:-0} == 1 ]]; then
+if [[ ${DSH_E2E_LONG_HISTORY:-0} == 1 || ${DSH_E2E_FRESH_LONG:-0} == 1 ]]; then
   cat >> "$profile/cordis.patch.yml" <<'YAML'
 - id: schedule
   config:
@@ -69,7 +69,7 @@ if [[ ${DSH_E2E_PROBE_REMOVAL:-0} == 1 ]]; then
   exit
 fi
 node "$root/integration/recurrence.mjs" "$prefix/node_modules/@deepseek-ai/dsh-util-time/lib/index.js"
-if [[ ${DSH_E2E_LONG_HISTORY:-0} == 1 ]]; then
+if [[ ${DSH_E2E_LONG_HISTORY:-0} == 1 || ${DSH_E2E_FRESH_LONG:-0} == 1 ]]; then
   DSH_E2E_HOST_TIMEOUT=78s run_host
 else
   run_host

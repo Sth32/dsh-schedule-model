@@ -4,12 +4,13 @@ import { isAbsolute, join } from 'node:path';
 import { resolveNatural, validateNaturalRoute } from './natural.js';
 import { defineTool, delegationDepthOf } from './tool.js';
 
+export const freshSetupPrefix='dsh-schedule-model/setup/';
 const taskIdPattern = /^schedule-[A-Za-z0-9_-]{1,100}$/;
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 const string = description => ({type:'string',required:true,description});
 const exactSelection = (a,b) => !!a&&!!b&&a.provider===b.provider&&a.model===b.model&&
   (a.reasoningEffort??null)===(b.reasoningEffort??null);
-const reasons=new Set(['override_unreadable','route_unavailable','session_already_started','selection_failed','selection_not_persisted']);
+const reasons=new Set(['override_unreadable','route_unavailable','session_already_started','selection_failed','selection_not_persisted','session_title_failed']);
 const output={schema:{type:'string'},render(_args,value){return [{type:'text',text:value}];}};
 
 function selection(value){
@@ -26,7 +27,7 @@ function createStore(profileDirectory){
   const dir=join(profileDirectory,'schedule-model-overrides');
   const path=(id,kind)=>{
     if(typeof id!=='string'||!taskIdPattern.test(id))throw new Error('Invalid schedule identity.');
-    return join(dir,id+(kind==='issue'?'.issue.json':'.json'));
+    return join(dir,id+(kind?'.'+kind+'.json':'.json'));
   };
   function decode(value,id){
     if(value?.version!==1||value.scheduleId!==id)throw new Error('Invalid scheduled model override state.');
@@ -56,10 +57,35 @@ function createStore(profileDirectory){
       await unlink(temporary).catch(error=>{if(error?.code!=='ENOENT')throw error;});
     }
   }
+  async function policy(id){
+    const value=await read(id,'fresh');
+    if(value===null)return {};
+    if(value.title!==undefined&&(!nonempty(value.title)||value.title.length>120))
+      throw new Error('Invalid scheduled session title.');
+    return {fresh:true,title:value.title};
+  }
+  async function config(id){
+    const rules=await policy(id);
+    const value=await read(id,null);
+    if(value===null&&rules.fresh)throw new Error('Missing fresh-session model configuration.');
+    return {...rules,selection:value===null||rules.fresh&&value.selection===null?null:selection(value.selection)};
+  }
   return {
-    async read(id){const value=await read(id);return value===null?null:selection(value.selection);},
+    config,
+    read:async id=>(await config(id)).selection,
     write:(id,selected)=>write(id,null,{selection:selection(selected)}),
-    remove,
+    async writeFresh(id,selected,title){
+      await write(id,'fresh',title===undefined?{}:{title});
+      await write(id,null,{selection:selection(selected)});
+    },
+    async clear(id){
+      if(!(await policy(id)).fresh)return remove(id);
+      let value;
+      try{value=await read(id,null);}catch{/* An explicit clear can repair invalid route state. */}
+      if(value?.selection===null)return false;
+      await write(id,null,{selection:null});
+      return true;
+    },
     async issue(id){
       const value=await read(id,'issue');
       if(value===null)return null;
@@ -122,6 +148,12 @@ export function createScheduleOverrides(ctx){
   }
 
   return {
+    async prepareFresh(id,selected,title,signal){
+      return serialize(id,async()=>{
+        signal?.throwIfAborted();
+        await store.writeFresh(id,selected,title);
+      });
+    },
     async commitConfirmed(id,selected,signal,confirmCurrent,before){
       return serialize(id,async()=>{
         signal.throwIfAborted();
@@ -130,7 +162,7 @@ export function createScheduleOverrides(ctx){
         if(!(current===null&&before===null)&&!exactSelection(current,before))return 'stale_override';
         if(!await confirmCurrent())return 'stale_task';
         signal.throwIfAborted();
-        if(selected===null)return await store.remove(id)?'changed':'unchanged';
+        if(selected===null)return await store.clear(id)?'changed':'unchanged';
         if(exactSelection(current,selected))return 'unchanged';
         await store.write(id,selected);
         return 'changed';
@@ -150,14 +182,15 @@ export function createScheduleOverrides(ctx){
       return ctx.on('schedule/resolve-agent',async(sessionId,next)=>{
         const row=reservation(ctx,sessionId);
         if(!row)return next();
+        if(row.target.create?.agentPreset?.startsWith(freshSetupPrefix))
+          throw new Error('Scheduled task setup has not been activated.');
         // Propagate native activation errors; the upstream uses not-found to
         // create a missing reserved Session. Override failures are reported separately.
         const agent=await next();
         if(agent.session.id!==sessionId)throw new Error('Scheduled model override target did not match the reservation.');
-        let selected;
-        try{selected=await store.read(row.record.id);}
+        let config;
+        try{config=await store.config(row.record.id);}
         catch{await skip(row,sessionId,'override_unreadable');return agent;}
-        if(!selected)return agent;
         const alreadyStarted=()=>{
           const boundary=ctx.agents.turnBoundaryOf(agent.session);
           return boundary.lastTurn!==0||boundary.openTurnStartSeq!==null||
@@ -166,15 +199,27 @@ export function createScheduleOverrides(ctx){
         // A startup plugin can queue briefing for the next step without
         // starting a turn. A running driver, actual turn, or queued waking
         // input is different and must not have its model replaced.
+        const {selection:selected,title,fresh}=config;
+        if(title!==undefined&&!alreadyStarted()){
+          try{
+              const titles=ctx.get('sessionTitle');
+              if(!titles)throw new Error('Session title service unavailable.');
+              if(titles.get(agent.session)?.title!==title){
+                titles.rename(agent.session,title);
+                if(!await ctx.sessions.flush(agent.session))throw new Error('Session title was not persisted.');
+              }
+          }catch{await skip(row,sessionId,'session_title_failed');return agent;}
+        }
+        if(!selected)return agent;
         if(alreadyStarted()&&!exactSelection(agent.model.current(),selected)){
-          await skip(row,sessionId,'session_already_started',true);return agent;
+          await skip(row,sessionId,'session_already_started',!fresh);return agent;
         }
         try{await ctx.llm.resolveCallConfig(selected);}
         catch{await skip(row,sessionId,'route_unavailable');return agent;}
         const started=alreadyStarted();
         const previous=agent.model.current();
         if(started&&!exactSelection(previous,selected)){
-          await skip(row,sessionId,'session_already_started',true);return agent;
+          await skip(row,sessionId,'session_already_started',!fresh);return agent;
         }
         try{if(!started)agent.model.select(selected);}
         catch{await skip(row,sessionId,'selection_failed');return agent;}
@@ -217,7 +262,7 @@ export function createScheduleOverrides(ctx){
               return JSON.stringify({code:'schedule_target_changed',id});
             exec.signal?.throwIfAborted();
             if(operation==='clear'){
-              const cleared=await store.remove(id);
+              const cleared=await store.clear(id);
               return JSON.stringify({id,cleared,restored:'native_preset_or_default',
                 appliesTo:'fresh deliveries that have not yet selected their route'});
             }

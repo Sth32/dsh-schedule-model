@@ -26,6 +26,8 @@ class Local extends LlmAdapter {
         [/管理台批量更新|Admin batch update/i,'schedule_admin_model_batch_update',{ids:centralIDs,model:'alpha',thinking:'高'}],
         [/管理台批量清除|Admin batch clear/i,'schedule_admin_model_batch_update',{ids:centralIDs,action:'clear'}],
       ]:[]),
+      [/创建GUI独立任务|Create the fresh GUI task/i,'schedule_create_with_model',{title:'GUI独立任务',prompt:'Fresh GUI run only.',model:'alpha',thinking:'低',dailyTimes:['04:30','12:30','18:30'],timeZone:'Asia/Shanghai',sessionMode:'fresh_each_run'}],
+      [/查询GUI独立任务|Inspect the fresh GUI task/i,'schedule_view_model',{identifier:'GUI独立任务'}],
       [/创建GUI三段任务|Create the three-time GUI task/i,'schedule_create_with_model',{title:'GUI三段任务',prompt,model:'alpha',thinking:'低',dailyTimes:['04:30','12:30','18:30'],timeZone:'Asia/Shanghai'}],
       [/把GUI旧任务改成|Change the existing GUI task/i,'schedule_update_model',{identifier:'GUI旧任务',model:'alpha',thinking:'高'}],
       [/撤销GUI旧任务|Clear the existing GUI task/i,'schedule_clear_model',{identifier:'GUI旧任务'}],

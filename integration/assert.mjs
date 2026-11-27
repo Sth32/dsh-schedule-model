@@ -81,3 +81,19 @@ if(process.env.DSH_E2E_LONG_HISTORY==='1'){
  assert.deepEqual(by('native_repeat_restart_ok'),[true]);
  console.log('PASS: actual repeated delivery honors cadence floor, keeps both receipts, pages by cursor and persists old route');
 }
+
+assert.deepEqual(by('fresh_native_staging_blocked'),[true]);
+assert.deepEqual(by('fresh_failed_creation_cleaned'),[true]);
+assert.deepEqual(by('fresh_created'),[{newTarget:true,noSession:true,unchangedPreset:true,cwd:true,recurrence:true}]);
+assert.deepEqual(by('fresh_archive_kept_active'),[true]);
+const freshRoute={provider:'deepseek-test',model:'alpha',reasoningEffort:'low'};
+assert.deepEqual(by('fresh_restart').map(({status,configured,receipt})=>({status,configured,receipt})),
+  [{status:'active',configured:freshRoute,receipt:true}]);
+const freshRuns=by('fresh_run');
+assert.equal(freshRuns.length,process.env.DSH_E2E_FRESH_LONG==='1'?2:1);
+assert.ok(freshRuns.every(run=>run.title==='Pinned fresh title'&&run.linked));
+assert.deepEqual(freshRuns.map(run=>run.route),Array(freshRuns.length).fill(freshRoute));
+assert.equal(by('fresh_mock_request').length,freshRuns.length);
+assert.ok(by('fresh_mock_request').every(({provider,model,effort,text})=>
+  provider==='deepseek-test'&&model==='alpha'&&effort==='low'&&text.includes('fixture-fresh-mode')));
+if(process.env.DSH_E2E_FRESH_LONG==='1')assert.deepEqual(by('fresh_distinct'),[true]);

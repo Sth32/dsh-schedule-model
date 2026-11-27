@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { apply as installPin, selection } from './index.js';
 import { inspectLatest, configuredSessionModel } from './observe.js';
 import { resolveNatural, naturalTiming, validateNaturalRoute } from './natural.js';
 import { defineTool, delegationDepthOf } from './tool.js';
-import { createScheduleOverrides } from './schedule-override.js';
+import { createScheduleOverrides, freshSetupPrefix } from './schedule-override.js';
 import { registerScheduleAdmin } from './schedule-admin.js';
 import { registerReuseAdmin } from './reuse-admin.js';
 import { prepareReceivingSessionModel } from './receiving-session-model.js';
@@ -76,24 +77,25 @@ export function apply(ctx, config) {
       });
     });
   });
-  ctx.effect(() => registerNatural(ctx, routes), 'schedule-model.natural');
+  ctx.effect(() => registerNatural(ctx, routes, () => overrides), 'schedule-model.natural');
   ctx.systemPrompt.section({
     name:'tool:schedule-model-natural',
     order:ctx.systemPrompt.getSectionOrder('TOOL_SCHEDULE'),
     text:({scope})=>ctx.tools.get('schedule_create_with_model',scope)
-      ?'For an existing task associated with this conversation, use schedule_update_model to change only the model or thinking level. In the management conversation, use the owner-approved schedule_admin_model_list and schedule_admin_model_batch_update for cross-conversation or multi-workspace requests. Preserve the recurrence and all other settings. For an explicit request to remove/reset an existing model override and restore the original preset/default, use schedule_clear_model. When showing a task, explain any pending reservation or skipped override, and do not describe a native receipt as model execution. Existing tasks that reuse a receiving session do not support a task-level override. In the management conversation use schedule_admin_change_reused_model, if available, to offer and approve the two distinct session options. Otherwise explain why no change was made. Never create or retarget an existing task as a workaround. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
+      ?'For an existing task associated with this conversation, use schedule_update_model to change only the model or thinking level. In the management conversation, use the owner-approved schedule_admin_model_list and schedule_admin_model_batch_update for cross-conversation or multi-workspace requests. Preserve the recurrence and all other settings. For an explicit request to remove/reset an existing model override and restore the original preset/default, use schedule_clear_model. When showing a task, explain any pending reservation or skipped override, and do not describe a native receipt as model execution. Existing tasks that reuse a receiving session do not support a task-level override. In the management conversation use schedule_admin_change_reused_model, if available, to offer and approve the two distinct session options. Otherwise explain why no change was made. Never create or retarget an existing task as a workaround. For a NEW scheduled task with a specified model or thinking level, use schedule_create_with_model, not the standard scheduler. Pass the user’s model name/alias and thinking level; do not ask for preset IDs or RRULE. When asked to start a new conversation each run or not share history, set sessionMode=fresh_each_run. When asked to reuse one dedicated conversation, set sessionMode=reuse and explain that manual conversation shares its history and archive-and-stop deletes its active task. If no mode is requested, keep reuse for backward compatibility and explain both effects after creation. For every hour use intervalMinutes=60. For multiple exact times per day pass every local HH:mm in dailyTimes, plus timeZone; one task only. If the user explicitly specifies a working directory, pass its absolute path as cwd; otherwise omit it. Ask the user to pick if a model or level is ambiguous or unsupported; never fall back. Omit unspecified thinking to follow the selected model default. Do not create anything until timing and task content are clear.'
       :'',
   });
   ctx.effect(() => registerQuery(ctx, routes, task => overrides?.state(task)), 'schedule-model.query');
 }
 
-function registerNatural(ctx, routes){
+function registerNatural(ctx, routes, getOverrides){
   return ctx.tools.register(defineTool({
     name:'schedule_create_with_model',
-    description:'Create a native DSH scheduled task with the requested model name/alias and requested thinking level. The model is selected only for a fresh task conversation. Prefer this when the user specifies a model or thinking level. Once, interval, and daily schedules are supported.',
+    description:'Create a native DSH scheduled task with the requested model name/alias and requested thinking level. Use fresh_each_run to create a separate conversation at each delivery, or reuse (the default) to create one dedicated conversation now and share its history across runs. Archiving and stopping activity on a reused receiver deletes its active task. Once, interval, and daily schedules are supported.',
     parameters:{
       title:str('User-facing task title; also the default title of the dedicated session'),
-      sessionTitle:{type:'string',description:'Optional pinned title of the dedicated session. Only pass when the user requests a different session title.'},
+      sessionTitle:{type:'string',description:'Optional pinned title of the receiving conversation(s). Only pass when the user requests a different session title.'},
+      sessionMode:{type:'string',enum:['reuse','fresh_each_run'],description:'Default reuse: one dedicated conversation, shared history; archiving with stop deletes active tasks. fresh_each_run: no conversation until delivery; each run gets its own.'},
       prompt:str('What the scheduled task should do'),
       model:str('Exact model ID/display name or user alias, e.g. ds. Never substitute an unspecified model.'),
       thinking:{type:'string',description:'Level requested by user, such as 低/low. Omit when user did not specify.'},
@@ -125,7 +127,10 @@ function registerNatural(ctx, routes){
       const routeError=await validateNaturalRoute(ctx.llm,selected,exec.signal);
       if(routeError)return JSON.stringify(routeError);
       exec.signal?.throwIfAborted();
-      const create=await sessionCreationOptions(ctx,exec.agent,a.cwd,selected,routes);
+      const targetOptions=await scheduledTargetOptions(exec.agent,a.cwd,selected,routes);
+      if(a.sessionMode==='fresh_each_run')return createFresh(ctx,getOverrides(),
+        {title,prompt:a.prompt.trim(),timing,create:targetOptions,selected,sessionTitle:a.sessionTitle===undefined?undefined:sessionTitle},exec);
+      const create=await sessionCreationOptions(ctx,targetOptions);
       exec.signal?.throwIfAborted();
       const session=await ctx.sessionController.create(create);
       const {agent}=await ctx.sessionController.resolveAgent(session.sessionId);
@@ -141,12 +146,12 @@ function registerNatural(ctx, routes){
         target:{kind:'session',sessionId:session.sessionId},
       },exec.agent.session.id,exec.signal);
       return JSON.stringify({id:task.id,scheduledAt:task.scheduledAt,configured:selected,
-        target:{kind:'session',sessionId:session.sessionId},sessionReuse:true});
+        target:{kind:'session',sessionId:session.sessionId},sessionReuse:true,warning:'Manual chat shares history with scheduled runs. Archiving this conversation with stop activity removes its active schedules.'});
     },
   }));
 }
 
-async function sessionCreationOptions(ctx,agent,explicitCwd,selected,routes){
+async function scheduledTargetOptions(agent,explicitCwd,selected,routes){
   const request={};
   const livePresets=agent.ctx?.get('agentPresets');
   const preset=livePresets?.composedPreset(agent.ctx);
@@ -158,12 +163,60 @@ async function sessionCreationOptions(ctx,agent,explicitCwd,selected,routes){
     request.agentPreset=preset;
   }
   const cwd=await scheduledWorkingDirectory(agent,explicitCwd);
+  return {...request,...(cwd===undefined?{}:{cwd})};
+}
+
+async function sessionCreationOptions(ctx,{cwd,...request}){
   if(cwd!==undefined){
     const workspace=await ctx.get('workspaceRegistry')?.resolveByPath(cwd);
     if(workspace===undefined)request.cwd=cwd;
     else request.workspaceId=workspace.id;
   }
   return request;
+}
+
+// Native create generates the task ID and immediately arms it. An intentionally
+// unresolvable preset keeps the staging row inert even across Host crashes
+// or when Run now races setup. Promote only after both plugin writes are durable.
+async function createFresh(ctx,overrides,{create,selected,sessionTitle,...request},exec){
+  if(!overrides||typeof ctx.agentPresets?.resolve!=='function'||typeof ctx.schedule.edit!=='function')
+    throw new Error('This DSH profile does not support safe fresh-session schedule creation.');
+  const stagingPreset=freshSetupPrefix+randomUUID();
+  try{
+    await ctx.agentPresets.resolve(stagingPreset);
+    throw new Error('Unexpected staging preset collision.');
+  }catch(error){
+    if(error?.code!=='agent-preset/not-found')throw error;
+  }
+  const actor=exec.agent.session.id;
+  exec.signal?.throwIfAborted();
+  const task=await ctx.schedule.create({...request,target:{kind:'new',create:{...create,agentPreset:stagingPreset}}},actor,exec.signal);
+  if(!task.updatedAt||task.target?.kind!=='new'||task.target.create?.agentPreset!==stagingPreset)
+    throw new Error(`Fresh schedule setup not verified (${task.id}); inspect the task before retrying.`);
+  try{
+    await overrides.prepareFresh(task.id,selected,sessionTitle,exec.signal);
+    exec.signal?.throwIfAborted();
+  }catch(error){
+    // Cleanup only the exact staging revision; a concurrently edited row is
+    // not ours to delete. No signal here: cancellation must also clean up.
+    let removed;
+    try{removed=await ctx.schedule.edit({id:task.id,action:'delete',expectedUpdatedAt:task.updatedAt},actor);}
+    catch{/* The guarded task may remain; never claim cleanup or retry. */}
+    if(removed?.deleted===true)throw error;
+    throw new Error(`Fresh schedule setup stopped (${task.id}); inspect the staging task before retrying.`,{cause:error});
+  }
+  const target={kind:'new',create};
+  let armed;
+  try{
+    armed=await ctx.schedule.edit({id:task.id,action:'update',expectedUpdatedAt:task.updatedAt,patch:{target}},actor,exec.signal);
+  }catch(error){
+    // The commit may have succeeded before the error became observable.
+    throw new Error(`Fresh schedule activation was not confirmed (${task.id}); inspect this task before retrying.`,{cause:error});
+  }
+  if(armed?.id!==task.id||armed.status!=='active'||armed.target?.kind!=='new'
+      ||armed.target.create?.agentPreset!==create.agentPreset||armed.target.create?.cwd!==create.cwd)
+    throw new Error(`Fresh schedule activation was not confirmed (${task.id}); inspect this task before retrying.`);
+  return JSON.stringify({id:task.id,scheduledAt:armed.scheduledAt,configured:selected,target:{kind:'new'},sessionReuse:false});
 }
 
 async function scheduledWorkingDirectory(agent,explicitCwd){

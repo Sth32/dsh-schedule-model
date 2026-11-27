@@ -200,3 +200,36 @@ test('clear requires ownership, reverts future delivery without changing native 
   assert.deepEqual((await f.run(delivery)).selections,[]);
   assert.deepEqual(f.task,before);
 });
+
+test('staging reservation is blocked; fresh title persists across runs and explicit model clear',async t=>{
+  const f=await fixture(t);
+  const target=structuredClone(f.stored.target);
+  f.stored.target.create.agentPreset='dsh-schedule-model/setup/test';
+  await assert.rejects(f.run(delivery,fakeAgent(),async()=>assert.fail('staging must not activate')),/not been activated/);
+  f.stored.target=target;
+  const titles=new Map();
+  f.ctx.get=()=>({get:session=>titles.get(session.id),rename:(session,title)=>titles.set(session.id,{title})});
+  await f.plugin.prepareFresh(id,route,'Pinned report');
+  assert.deepEqual((await f.run(delivery)).selections,[route]);
+  assert.equal(titles.get(delivery).title,'Pinned report');
+  f.stored.pendingDelivery.targetSessionId='session-two';
+  assert.deepEqual((await f.run('session-two')).selections,[route]);
+  assert.equal(titles.get('session-two').title,'Pinned report');
+  await f.clear();
+  f.stored.pendingDelivery.targetSessionId='session-three';
+  assert.deepEqual((await f.run('session-three')).selections,[]);
+  assert.equal(titles.get('session-three').title,'Pinned report');
+});
+
+test('a fresh created policy blocks missing selection and refuses a mismatched started agent',async t=>{
+  const f=await fixture(t);
+  await f.plugin.prepareFresh(id,route);
+  f.ctx.agents.turnBoundaryOf=()=>({lastTurn:1,openTurnStartSeq:null});
+  await assert.rejects(f.run(delivery),/session_already_started/);
+  assert.equal((await f.plugin.state(f.task)).lastSkipped.status,'blocked_before_delivery');
+  await rm(f.path);
+  await assert.rejects(f.run(delivery),/override_unreadable/);
+  assert.equal((await f.plugin.state(f.task)).overrideStatus,'unreadable');
+  await f.clear();
+  assert.deepEqual((await f.run(delivery)).selections,[]);
+});
